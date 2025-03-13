@@ -12,7 +12,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 
 @RunWith(AndroidJUnit4::class)
-class DeepLinkNowInstrumentedTest {
+class DLNInstrumentedTest {
     
     private lateinit var context: Context
     
@@ -21,16 +21,16 @@ class DeepLinkNowInstrumentedTest {
         context = ApplicationProvider.getApplicationContext()
         
         // Initialize the SDK for testing
-        DeepLinkNow.initialize(
+        DLN.init(
             context = context,
             apiKey = "test-api-key",
-            config = mapOf("enableLogs" to true)
+            enableLogs = true
         )
     }
     
     @Test
     fun testSDKInitialization() {
-        val instance = DeepLinkNow.getInstance()
+        val instance = DLN.getInstance()
         assertNotNull(instance)
     }
     
@@ -39,7 +39,7 @@ class DeepLinkNowInstrumentedTest {
         // This test assumes that deeplinknow.com is in the valid domains list
         // In a real test, you might need to set up the valid domains first
         val url = "https://deeplinknow.com/product/123?referrer=social_share&campaign=summer"
-        val result = DeepLinkNow.getInstance().parseDeepLink(url)
+        val result = DLN.getInstance().parseDeepLink(url)
         
         // If the domain is valid, we should get a result
         if (result != null) {

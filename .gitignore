@@ -1,1 +1,19 @@
 /build
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/captures
+.externalNativeBuild
+.cxx
+
+# Maven Central publishing
+secring.gpg
+gradle.properties
+keystore.jks
+private.key
+*.gpg
+/deployments/
+gradle.properties.backup
+gradle.properties.example

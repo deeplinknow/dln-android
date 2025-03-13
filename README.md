@@ -9,7 +9,7 @@ The DeepLinkNow Android SDK provides deep linking functionality for Android appl
 ```xml
 <dependency>
   <groupId>com.deeplinknow</groupId>
-  <artifactId>deeplinknow</artifactId>
+  <artifactId>dln-android</artifactId>
   <version>1.0.0</version>
   <type>aar</type>
 </dependency>
@@ -21,7 +21,7 @@ Add the DeepLinkNow SDK to your project by including it in your app's `build.gra
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:deeplinknow:1.0.0'
+    implementation 'com.deeplinknow:dln-android:1.0.0'
 }
 ```
 
@@ -29,7 +29,7 @@ Or if you're using Kotlin DSL (`build.gradle.kts`):
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:deeplinknow:1.0.0")
+    implementation("com.deeplinknow:dln-android:1.0.0")
 }
 ```
 

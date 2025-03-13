@@ -141,7 +141,7 @@ class DLN private constructor(
                     warn("API request failed: ${response.code} ${response.body?.string()}")
                     return@withContext null
                 }
-                return@withContext response.body.string()
+                return@withContext response.body?.string()
             }
         } catch (e: Exception) {
             warn("API request failed", e)
