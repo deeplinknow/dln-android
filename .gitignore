@@ -14,6 +14,6 @@ gradle.properties
 keystore.jks
 private.key
 *.gpg
-/deployments/
+/deployments/last_deployment_id.txt
 gradle.properties.backup
 gradle.properties.example
