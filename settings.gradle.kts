@@ -1,4 +1,5 @@
 rootProject.name = "dln-android"
+include(":example")
 
 pluginManagement {
     repositories {
@@ -34,6 +35,7 @@ dependencyResolutionManagement {
             
             plugin("androidLibrary", "com.android.library").version("8.2.0")
             plugin("jetbrainsKotlinAndroid", "org.jetbrains.kotlin.android").version("1.9.0")
+            plugin("androidApplication", "com.android.application").version("8.2.0")
         }
     }
 } 

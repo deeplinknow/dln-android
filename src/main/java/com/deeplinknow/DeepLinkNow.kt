@@ -37,7 +37,10 @@ data class Fingerprint(
     @SerializedName("device_id") val deviceId: String?,
     @SerializedName("advertising_id") val advertisingId: String?,
     @SerializedName("vendor_id") val vendorId: String?,
-    @SerializedName("hardware_fingerprint") val hardwareFingerprint: String?
+    @SerializedName("hardware_fingerprint") val hardwareFingerprint: String?,
+    @SerializedName("screen_width") val screenWidth: Int?,
+    @SerializedName("screen_height") val screenHeight: Int?,
+    @SerializedName("pixel_ratio") val pixelRatio: Float?
 )
 
 data class DeeplinkMatch(
@@ -49,15 +52,57 @@ data class DeeplinkMatch(
     @SerializedName("expires_at") val expiresAt: String
 )
 
-data class MatchResponse(
-    val match: Match
+data class MatchComponentDetails(
+    val matched: Boolean,
+    val score: Double
+)
+
+data class DeviceMatchDetails(
+    val matched: Boolean,
+    val score: Double,
+    val components: DeviceComponents
 ) {
-    data class Match(
-        val deeplink: DeeplinkMatch?,
-        @SerializedName("confidence_score") val confidenceScore: Double,
-        @SerializedName("ttl_seconds") val ttlSeconds: Int
+    data class DeviceComponents(
+        val platform: Boolean,
+        @SerializedName("os_version") val osVersion: Boolean,
+        @SerializedName("device_model") val deviceModel: Boolean,
+        @SerializedName("hardware_fingerprint") val hardwareFingerprint: Boolean
     )
 }
+
+data class LocaleMatchDetails(
+    val matched: Boolean,
+    val score: Double,
+    val components: LocaleComponents
+) {
+    data class LocaleComponents(
+        val language: Boolean,
+        val timezone: Boolean
+    )
+}
+
+data class TimeProximityDetails(
+    val score: Double,
+    @SerializedName("time_difference_minutes") val timeDifferenceMinutes: Int
+)
+
+data class MatchDetails(
+    @SerializedName("ip_match") val ipMatch: MatchComponentDetails,
+    @SerializedName("device_match") val deviceMatch: DeviceMatchDetails,
+    @SerializedName("time_proximity") val timeProximity: TimeProximityDetails,
+    @SerializedName("locale_match") val localeMatch: LocaleMatchDetails
+)
+
+data class Match(
+    val deeplink: DeeplinkMatch?,
+    @SerializedName("confidence_score") val confidenceScore: Double,
+    @SerializedName("match_details") val matchDetails: MatchDetails
+)
+
+data class MatchResponse(
+    val matches: List<Match>,
+    @SerializedName("ttl_seconds") val ttlSeconds: Int
+)
 
 data class InitResponse(
     val app: App,
@@ -99,7 +144,7 @@ class DLN private constructor(
     private val gson = Gson()
     private val client = OkHttpClient()
     private val validDomains = mutableSetOf("deeplinknow.com", "deeplink.now")
-    private val installTime = Instant.now().toString()
+    private val installTime = Instant.now().toString().replace("Z", "+00:00")
     private var initResponse: InitResponse? = null
 
     private fun log(message: String, vararg args: Any?) {
@@ -149,19 +194,70 @@ class DLN private constructor(
         }
     }
 
+    private fun simpleHash(str: String): String {
+        var hash = 0
+        for (element in str) {
+            val char = element.code
+            hash = ((hash shl 5) - hash) + char
+            hash = hash and hash // Convert to 32bit integer
+        }
+        return hash.toString(16)
+    }
+
+    private fun generateHardwareFingerprint(
+        platform: String,
+        screenWidth: Int?,
+        screenHeight: Int?,
+        pixelRatio: Float?,
+        language: String,
+        timezone: String
+    ): String {
+        val components = listOf(
+            platform,
+            Build.VERSION.RELEASE,
+            screenWidth?.toString(),
+            screenHeight?.toString(),
+            pixelRatio?.toString(),
+            language,
+            timezone
+        ).filterNotNull()
+
+        val fingerprintString = components.joinToString("|")
+        return simpleHash(fingerprintString)
+    }
+
     private suspend fun getFingerprint(): Fingerprint {
+        val currentTime = Instant.now().toString().replace("Z", "+00:00")
+        val displayMetrics = context.resources.displayMetrics
+        val screenWidth = displayMetrics.widthPixels
+        val screenHeight = displayMetrics.heightPixels
+        val pixelRatio = displayMetrics.density
+
+        val hardwareFingerprint = generateHardwareFingerprint(
+            platform = "android",
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            pixelRatio = pixelRatio,
+            language = Locale.getDefault().language,
+            timezone = TimeZone.getDefault().id
+        )
+
         return Fingerprint(
-            userAgent = "DLN-Android/${Build.VERSION.RELEASE}",
+            userAgent = "Mozilla/5.0 (Linux; Android ${Build.VERSION.RELEASE}; ${Build.MODEL}) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.120 Mobile Safari/537.36",
+            platform = "android",
             osVersion = Build.VERSION.RELEASE,
             deviceModel = Build.MODEL,
             language = Locale.getDefault().language,
             timezone = TimeZone.getDefault().id,
             installedAt = installTime,
-            lastOpenedAt = Instant.now().toString(),
+            lastOpenedAt = currentTime,
             deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID),
-            advertisingId = null, // Implement if needed
+            advertisingId = null,
             vendorId = null,
-            hardwareFingerprint = null
+            hardwareFingerprint = hardwareFingerprint,
+            screenWidth = screenWidth,
+            screenHeight = screenHeight,
+            pixelRatio = pixelRatio
         )
     }
 
@@ -225,6 +321,55 @@ class DLN private constructor(
         )?.let { gson.fromJson(it, MatchResponse::class.java) }?.also {
             log("Match response:", it)
         }
+    }
+
+    suspend fun hasDeepLinkToken(): Boolean {
+        return try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clipData = clipboard.primaryClip
+            if (clipData != null && clipData.itemCount > 0) {
+                val content = clipData.getItemAt(0).text?.toString()
+                content?.startsWith("dln://") ?: false
+            } else {
+                false
+            }
+        } catch (e: Exception) {
+            warn("Failed to check clipboard:", e)
+            false
+        }
+    }
+
+    suspend fun checkClipboard(): String? {
+        if (!isInitialized()) {
+            warn("SDK not initialized. Call initialize() first")
+            return null
+        }
+
+        return try {
+            val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as android.content.ClipboardManager
+            val clipData = clipboard.primaryClip
+            if (clipData != null && clipData.itemCount > 0) {
+                val content = clipData.getItemAt(0).text?.toString()
+                val domain = content?.split("://")?.getOrNull(1)?.split("/")?.getOrNull(0)
+                if (domain != null && (domain.contains("deeplinknow.com") || 
+                    domain.contains("deeplink.now") || 
+                    isValidDomain(domain))) {
+                    log("Found deep link token in clipboard")
+                    content
+                } else {
+                    null
+                }
+            } else {
+                null
+            }
+        } catch (e: Exception) {
+            warn("Failed to read clipboard:", e)
+            null
+        }
+    }
+
+    private fun isInitialized(): Boolean {
+        return instance?.get() != null
     }
 
     companion object {
