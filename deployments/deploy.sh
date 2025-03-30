@@ -76,8 +76,8 @@ function check_gpg() {
 function increment_version() {
   log "Incrementing version number..."
   
-  # Get current version from build.gradle.kts
-  CURRENT_VERSION=$(grep -o 'version = "[^"]*"' build.gradle.kts | cut -d'"' -f2)
+  # Get current version from build.gradle.kts - fixing the version extraction to handle newlines
+  CURRENT_VERSION=$(grep -o 'version = "[^"]*"' build.gradle.kts | head -1 | cut -d'"' -f2)
   
   if [ -z "$CURRENT_VERSION" ]; then
     error "Could not find version in build.gradle.kts"
@@ -98,8 +98,11 @@ function increment_version() {
   NEW_VERSION="$MAJOR.$MINOR.$PATCH"
   log "New version: $NEW_VERSION"
   
-  # Update version in build.gradle.kts
-  sed -i '' "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" build.gradle.kts
+  # Update version in build.gradle.kts - using perl instead of sed for better multiline handling
+  perl -i -pe "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" build.gradle.kts
+  
+  # Also update the version in the publication section
+  perl -i -pe "s/version = \"$CURRENT_VERSION\"/version = \"$NEW_VERSION\"/" build.gradle.kts
   
   log "Version updated to $NEW_VERSION"
   return 0
