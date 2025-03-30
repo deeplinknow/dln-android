@@ -28,7 +28,13 @@ class MainViewModel : ViewModel() {
             viewModelScope.launch {
                 DeepLinkNow.initialize(
                     apiKey = "web-test-api-key",
-                    config = DeepLinkNow.Config(enableLogs = true)
+                    config = DeepLinkNow.Config(
+                        enableLogs = true,
+                        // Set standard phone screen dimensions for testing
+                        overrideScreenWidth = 360,
+                        overrideScreenHeight = 800,
+                        overridePixelRatio = 2.0f
+                    )
                 )
                 isInitialized = true
             }

@@ -24,7 +24,10 @@ import java.lang.ref.WeakReference
 
 data class DLNConfig(
     val apiKey: String,
-    val enableLogs: Boolean = false
+    val enableLogs: Boolean = false,
+    val overrideScreenWidth: Int? = null,
+    val overrideScreenHeight: Int? = null,
+    val overridePixelRatio: Float? = null
 )
 
 data class Fingerprint(
@@ -236,11 +239,54 @@ class DLN private constructor(
 
     private suspend fun getFingerprint(): Fingerprint {
         val currentTime = formatDateToISO8601(Instant.now())
-        val displayMetrics = context.resources.displayMetrics
-        val screenWidth = displayMetrics.widthPixels
-        val screenHeight = displayMetrics.heightPixels
-        val pixelRatio = displayMetrics.density
-
+        
+        // Check if dimension overrides are set in config
+        val screenWidth: Int
+        val screenHeight: Int 
+        val pixelRatio: Float
+        
+        // Use overrides if provided (for testing)
+        if (config.overrideScreenWidth != null && 
+            config.overrideScreenHeight != null) {
+            
+            screenWidth = config.overrideScreenWidth
+            screenHeight = config.overrideScreenHeight
+            pixelRatio = config.overridePixelRatio ?: context.resources.displayMetrics.density
+            
+            Log.d("DLN_Screen", "Using override dimensions: width=$screenWidth, height=$screenHeight, density=$pixelRatio")
+        } else {
+            // Otherwise use standard detection with reasonableness checks
+            val displayMetrics = context.resources.displayMetrics
+            
+            // For emulators/simulators, sometimes we need to check if these values are reasonable
+            val reasonableMinWidth = 320
+            val reasonableMaxWidth = 1440
+            val reasonableMinHeight = 480
+            val reasonableMaxHeight = 2960
+            
+            if (displayMetrics.widthPixels >= reasonableMinWidth && 
+                displayMetrics.widthPixels <= reasonableMaxWidth &&
+                displayMetrics.heightPixels >= reasonableMinHeight && 
+                displayMetrics.heightPixels <= reasonableMaxHeight) {
+                // Values look reasonable, use them
+                screenWidth = displayMetrics.widthPixels
+                screenHeight = displayMetrics.heightPixels
+                pixelRatio = displayMetrics.density
+                
+                Log.d("DLN_Screen", "Using displayMetrics directly: width=$screenWidth, height=$screenHeight, density=$pixelRatio")
+            } else {
+                // Values don't look reasonable, try an alternative approach
+                val configuration = context.resources.configuration
+                screenWidth = Math.round(configuration.screenWidthDp * displayMetrics.density)
+                screenHeight = Math.round(configuration.screenHeightDp * displayMetrics.density)
+                pixelRatio = displayMetrics.density
+                
+                Log.d("DLN_Screen", "Using configuration: original width=${displayMetrics.widthPixels}, " +
+                        "height=${displayMetrics.heightPixels} were unreasonable. " +
+                        "New width=$screenWidth, height=$screenHeight, density=$pixelRatio")
+            }
+        }
+        
         val hardwareFingerprint = generateHardwareFingerprint(
             platform = "android",
             screenWidth = screenWidth,
@@ -389,13 +435,19 @@ class DLN private constructor(
         fun init(
             context: Context,
             apiKey: String,
-            enableLogs: Boolean = false
+            enableLogs: Boolean = false,
+            overrideScreenWidth: Int? = null,
+            overrideScreenHeight: Int? = null,
+            overridePixelRatio: Float? = null
         ) {
             instance = WeakReference(
                 DLN(
                     config = DLNConfig(
                         apiKey = apiKey,
-                        enableLogs = enableLogs
+                        enableLogs = enableLogs,
+                        overrideScreenWidth = overrideScreenWidth,
+                        overrideScreenHeight = overrideScreenHeight,
+                        overridePixelRatio = overridePixelRatio
                     ),
                     context = context.applicationContext
                 )
