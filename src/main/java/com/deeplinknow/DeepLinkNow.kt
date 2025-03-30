@@ -16,6 +16,8 @@ import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 import java.time.Instant
+import java.time.ZoneOffset
+import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.TimeZone
 import java.lang.ref.WeakReference
@@ -27,16 +29,16 @@ data class DLNConfig(
 
 data class Fingerprint(
     @SerializedName("user_agent") val userAgent: String,
-    val platform: String = "android",
+    val platform: String = "android", // Must be "ios" or "android"
     @SerializedName("os_version") val osVersion: String,
     @SerializedName("device_model") val deviceModel: String,
     val language: String,
     val timezone: String,
-    @SerializedName("installed_at") val installedAt: String,
-    @SerializedName("last_opened_at") val lastOpenedAt: String,
+    @SerializedName("installed_at") val installedAt: String, // RFC3339 format: yyyy-MM-dd'T'HH:mm:ss'Z'
+    @SerializedName("last_opened_at") val lastOpenedAt: String, // RFC3339 format: yyyy-MM-dd'T'HH:mm:ss'Z'
     @SerializedName("device_id") val deviceId: String?,
-    @SerializedName("advertising_id") val advertisingId: String?,
-    @SerializedName("vendor_id") val vendorId: String?,
+    @SerializedName("advertising_id") val advertisingId: String, // Required field
+    @SerializedName("vendor_id") val vendorId: String, // Required field
     @SerializedName("hardware_fingerprint") val hardwareFingerprint: String?,
     @SerializedName("screen_width") val screenWidth: Int?,
     @SerializedName("screen_height") val screenHeight: Int?,
@@ -144,7 +146,7 @@ class DLN private constructor(
     private val gson = Gson()
     private val client = OkHttpClient()
     private val validDomains = mutableSetOf("deeplinknow.com", "deeplink.now")
-    private val installTime = Instant.now().toString().replace("Z", "+00:00")
+    private val installTime = formatDateToISO8601(Instant.now())
     private var initResponse: InitResponse? = null
 
     private fun log(message: String, vararg args: Any?) {
@@ -226,8 +228,14 @@ class DLN private constructor(
         return simpleHash(fingerprintString)
     }
 
+    private fun formatDateToISO8601(instant: Instant): String {
+        val formatter = DateTimeFormatter.ofPattern("yyyy-MM-dd'T'HH:mm:ss'Z'")
+            .withZone(ZoneOffset.UTC)
+        return formatter.format(instant)
+    }
+
     private suspend fun getFingerprint(): Fingerprint {
-        val currentTime = Instant.now().toString().replace("Z", "+00:00")
+        val currentTime = formatDateToISO8601(Instant.now())
         val displayMetrics = context.resources.displayMetrics
         val screenWidth = displayMetrics.widthPixels
         val screenHeight = displayMetrics.heightPixels
@@ -252,8 +260,8 @@ class DLN private constructor(
             installedAt = installTime,
             lastOpenedAt = currentTime,
             deviceId = Settings.Secure.getString(context.contentResolver, Settings.Secure.ANDROID_ID),
-            advertisingId = null,
-            vendorId = null,
+            advertisingId = "",
+            vendorId = "",
             hardwareFingerprint = hardwareFingerprint,
             screenWidth = screenWidth,
             screenHeight = screenHeight,

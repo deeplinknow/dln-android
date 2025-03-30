@@ -9,6 +9,10 @@ plugins {
     id("signing")
 }
 
+// Set the group ID to match what's expected by the example app
+group = "com.deeplinknow"
+version = "1.0.12"
+
 android {
     namespace = "com.deeplinknow"
     compileSdk = 34
@@ -95,7 +99,7 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
         create<MavenPublication>("release") {
             groupId = "com.deeplinknow"
             artifactId = "dln-android"
-            version = "1.0.11"
+            version = "1.0.12"
 
             afterEvaluate {
                 from(components["release"])
@@ -133,7 +137,7 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
     repositories {
         maven {
             name = "LocalMaven"
-            url = uri("${buildDir}/local-maven-repo")
+            url = uri("${layout.buildDirectory.get()}/local-maven-repo")
         }
     }
 }
@@ -176,12 +180,12 @@ tasks.register("verifySigningConfig") {
 tasks.register<Zip>("createCentralPortalBundle") {
     dependsOn("publishReleasePublicationToLocalMavenRepository")
 
-    from("${buildDir}/local-maven-repo")
-    destinationDirectory.set(file("${buildDir}/central-portal"))
+    from("${layout.buildDirectory.get()}/local-maven-repo")
+    destinationDirectory.set(layout.buildDirectory.dir("central-portal").get())
     archiveFileName.set("central-portal-bundle.zip")
 
     doLast {
-        println("Central Portal bundle created at: ${buildDir}/central-portal/central-portal-bundle.zip")
+        println("Central Portal bundle created at: ${layout.buildDirectory.get()}/central-portal/central-portal-bundle.zip")
     }
 }
 
@@ -194,5 +198,5 @@ tasks.register<Jar>("androidSourcesJar") {
 // Create Javadoc JAR
 tasks.register<Jar>("androidJavadocJar") {
     archiveClassifier.set("javadoc")
-    from("$buildDir/docs/javadoc")
+    from("${layout.buildDirectory.get()}/docs/javadoc")
 }
