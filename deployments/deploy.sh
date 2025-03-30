@@ -133,7 +133,8 @@ function build_project() {
   fi
   
   # Verify that signature files exist in the local Maven repo
-  VERSION=$(grep -o 'version = "[^"]*"' build.gradle.kts | cut -d'"' -f2)
+  # Make sure we get the exact version from the current build.gradle.kts file
+  VERSION=$(grep -o 'version = "[^"]*"' build.gradle.kts | head -1 | cut -d'"' -f2)
   ARTIFACT_PATH="build/local-maven-repo/com/deeplinknow/dln-android/${VERSION}"
   
   log "Checking for artifacts and signatures in: ${ARTIFACT_PATH}"
@@ -152,7 +153,11 @@ function build_project() {
   
   # Print all files in directory for debugging
   log "Directory contents:"
-  ls -la "${ARTIFACT_PATH}"
+  ls -la "${ARTIFACT_PATH}" || {
+    warn "Directory not found: ${ARTIFACT_PATH}"
+    mkdir -p "${ARTIFACT_PATH}"
+    warn "Created directory: ${ARTIFACT_PATH}"
+  }
   echo ""
   
   # Check each required file and its signature

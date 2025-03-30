@@ -11,7 +11,7 @@ plugins {
 
 // Set the group ID to match what's expected by the example app
 group = "com.deeplinknow"
-version = "1.0.13"
+version = "1.0.14"
 
 android {
     namespace = "com.deeplinknow"
@@ -99,7 +99,7 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
         create<MavenPublication>("release") {
             groupId = "com.deeplinknow"
             artifactId = "dln-android"
-            version = "1.0.13"
+            version = "1.0.14"
 
             afterEvaluate {
                 from(components["release"])
