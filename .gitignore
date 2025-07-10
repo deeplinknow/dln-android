@@ -3,10 +3,19 @@
 .gradle
 /local.properties
 /.idea
+
 .DS_Store
 /captures
 .externalNativeBuild
 .cxx
+
+# Example project
+example/.idea
+example/.gradle
+example/build
+example/captures
+example/gradle.properties
+example/gradle.properties.backup
 
 # Maven Central publishing
 secring.gpg
