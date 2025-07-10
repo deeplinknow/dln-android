@@ -9,13 +9,53 @@
 .externalNativeBuild
 .cxx
 
-# Example project
-example/.idea
-example/.gradle
-example/build
-example/captures
-example/gradle.properties
-example/gradle.properties.backup
+# Example project - comprehensive build artifacts
+/example/.idea/
+/example/.gradle/
+/example/build/
+/example/captures/
+/example/.externalNativeBuild/
+/example/.cxx/
+/example/local.properties
+/example/*.iml
+/example/.DS_Store
+/example/gradle.properties
+/example/gradle.properties.backup
+
+# Example project - app module build artifacts
+/example/app/build/
+/example/app/*.iml
+/example/app/.DS_Store
+
+# Example project - lint and analysis outputs
+/example/lint-results*.xml
+/example/lint-results*.html
+/example/app/lint-results*.xml
+/example/app/lint-results*.html
+
+# Example project - proguard outputs
+/example/app/proguard/
+/example/app/mapping.txt
+
+# Example project - APK and other outputs
+/example/app/outputs/
+/example/app/intermediates/
+/example/app/tmp/
+
+# Example project - any additional modules
+/example/*/build/
+/example/*/*.iml
+/example/*/.DS_Store
+
+# Example project - test and coverage reports
+/example/app/coverage/
+/example/app/test-results/
+/example/coverage/
+/example/test-results/
+
+# Example project - other generated files
+# Note: gradle wrapper files (gradlew, gradlew.bat, gradle/) are intentionally kept
+# as they should be committed to allow building without local Gradle installation
 
 # Maven Central publishing
 secring.gpg
