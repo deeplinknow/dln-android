@@ -1,4 +1,4 @@
-package com.example.dlnwrapper
+package com.deeplinknow.example
 
 import org.junit.Test
 

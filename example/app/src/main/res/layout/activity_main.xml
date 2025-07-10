@@ -28,7 +28,7 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
             android:backgroundTint="@android:color/holo_blue_dark"
-            android:text="Init DLN" />
+            android:text="Auto-Initializing..." />
 
         <Button
             android:id="@+id/visitExternalLinkButton"
@@ -54,11 +54,58 @@
             android:backgroundTint="@android:color/holo_blue_dark"
             android:text="Check Clipboard" />
 
+        <Button
+            android:id="@+id/testDeepLinkButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="@android:color/holo_orange_light"
+            android:text="Test Deep Link Handling" />
+
+        <Button
+            android:id="@+id/testManualParsingButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="@android:color/holo_purple"
+            android:text="Test Manual URL Parsing" />
+
+        <Button
+            android:id="@+id/clearResultsButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:backgroundTint="@android:color/holo_red_light"
+            android:text="Clear All Results" />
+
         <TextView
             android:id="@+id/clipboardResultText"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="20dp"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/deepLinkResultText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@android:color/holo_green_light"
+            android:padding="10dp"
+            android:textColor="@android:color/black"
+            android:textStyle="bold"
+            android:visibility="gone" />
+
+        <TextView
+            android:id="@+id/logOutputText"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="20dp"
+            android:background="@android:color/darker_gray"
+            android:fontFamily="monospace"
+            android:padding="10dp"
+            android:textColor="@android:color/white"
+            android:textSize="12sp"
             android:visibility="gone" />
 
         <TextView

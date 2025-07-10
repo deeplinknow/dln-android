@@ -1,4 +1,4 @@
-package com.example.dlnwrapper
+package com.deeplinknow.example
 
 /**
  * This Match class is a simplified version of the DeepLinkNow SDK's Match class

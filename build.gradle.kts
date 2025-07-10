@@ -11,7 +11,7 @@ plugins {
 
 // Set the group ID to match what's expected by the example app
 group = "com.deeplinknow"
-version = "1.0.14"
+version = "1.0.15"
 
 android {
     namespace = "com.deeplinknow"
@@ -77,6 +77,9 @@ dependencies {
     implementation(libs.okhttp.android)
     implementation(libs.gson.v2101)
     
+    // Google Install Referrer Library for deferred deep linking
+    implementation("com.android.installreferrer:installreferrer:2.2")
+    
     // Unit testing
     testImplementation(libs.junit)
     testImplementation("io.mockk:mockk:1.12.5")
@@ -99,7 +102,7 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
         create<MavenPublication>("release") {
             groupId = "com.deeplinknow"
             artifactId = "dln-android"
-            version = "1.0.14"
+            version = "1.0.15"
 
             afterEvaluate {
                 from(components["release"])

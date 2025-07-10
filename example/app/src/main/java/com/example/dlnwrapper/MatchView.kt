@@ -1,4 +1,4 @@
-package com.example.dlnwrapper
+package com.deeplinknow.example
 
 import android.content.Context
 import android.view.LayoutInflater

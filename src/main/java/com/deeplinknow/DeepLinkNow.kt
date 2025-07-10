@@ -1,16 +1,21 @@
 package com.deeplinknow
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
 import android.util.Log
+import com.android.installreferrer.api.InstallReferrerClient
+import com.android.installreferrer.api.InstallReferrerStateListener
+import com.android.installreferrer.api.ReferrerDetails
 import com.google.gson.Gson
 import com.google.gson.annotations.SerializedName
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
@@ -21,6 +26,7 @@ import java.time.format.DateTimeFormatter
 import java.util.Locale
 import java.util.TimeZone
 import java.lang.ref.WeakReference
+import kotlin.coroutines.resume
 
 data class DLNConfig(
     val apiKey: String,
@@ -29,6 +35,15 @@ data class DLNConfig(
     val overrideScreenHeight: Int? = null,
     val overridePixelRatio: Float? = null
 )
+
+data class DeepLinkData(
+    val route: String,
+    val params: Map<String, String>
+)
+
+interface DeepLinkCallback {
+    fun onDeepLinkOpen(deepLinkData: DeepLinkData)
+}
 
 data class Fingerprint(
     @SerializedName("user_agent") val userAgent: String,
@@ -142,6 +157,20 @@ data class InitResponse(
     }
 }
 
+data class ReferrerLookupResponse(
+    val success: Boolean,
+    val deeplink: DeeplinkMatch?,
+    val message: String?
+)
+
+data class ReferrerData(
+    val referrerString: String,
+    val fpId: String?,
+    val deeplinkId: String?,
+    val deeplinkData: DeeplinkMatch?,
+    val processedAt: Long
+)
+
 class DLN private constructor(
     private val config: DLNConfig,
     private val context: Context
@@ -151,6 +180,9 @@ class DLN private constructor(
     private val validDomains = mutableSetOf("deeplinknow.com", "deeplink.now")
     private val installTime = formatDateToISO8601(Instant.now())
     private var initResponse: InitResponse? = null
+    private val sharedPreferences: SharedPreferences = context.getSharedPreferences("dln_referrer", Context.MODE_PRIVATE)
+    private var referrerData: ReferrerData? = null
+    private var deepLinkCallback: DeepLinkCallback? = null
 
     private fun log(message: String, vararg args: Any?) {
         if (config.enableLogs) {
@@ -197,6 +229,170 @@ class DLN private constructor(
             warn("API request failed", e)
             return@withContext null
         }
+    }
+
+    private suspend fun fetchInstallReferrer(): String? = suspendCancellableCoroutine { continuation ->
+        val referrerClient = InstallReferrerClient.newBuilder(context).build()
+        
+        referrerClient.startConnection(object : InstallReferrerStateListener {
+            override fun onInstallReferrerSetupFinished(responseCode: Int) {
+                when (responseCode) {
+                    InstallReferrerClient.InstallReferrerResponse.OK -> {
+                        try {
+                            val response = referrerClient.installReferrer
+                            val referrerUrl = response.installReferrer
+                            log("Install referrer: $referrerUrl")
+                            continuation.resume(referrerUrl)
+                        } catch (e: Exception) {
+                            warn("Failed to get install referrer", e)
+                            continuation.resume(null)
+                        } finally {
+                            referrerClient.endConnection()
+                        }
+                    }
+                    InstallReferrerClient.InstallReferrerResponse.FEATURE_NOT_SUPPORTED -> {
+                        log("Install referrer not supported")
+                        continuation.resume(null)
+                        referrerClient.endConnection()
+                    }
+                    InstallReferrerClient.InstallReferrerResponse.SERVICE_UNAVAILABLE -> {
+                        log("Install referrer service unavailable")
+                        continuation.resume(null)
+                        referrerClient.endConnection()
+                    }
+                    else -> {
+                        log("Install referrer unknown response: $responseCode")
+                        continuation.resume(null)
+                        referrerClient.endConnection()
+                    }
+                }
+            }
+
+            override fun onInstallReferrerServiceDisconnected() {
+                log("Install referrer service disconnected")
+                continuation.resume(null)
+            }
+        })
+        
+        continuation.invokeOnCancellation {
+            referrerClient.endConnection()
+        }
+    }
+
+    private fun parseReferrerString(referrerString: String): Pair<String?, String?> {
+        log("Parsing referrer string: $referrerString")
+        
+        // Look for fp_id=xxxxx or deeplink_id=xxxxx
+        val fpIdRegex = Regex("fp_id=([^&]+)")
+        val deeplinkIdRegex = Regex("deeplink_id=([^&]+)")
+        
+        val fpIdMatch = fpIdRegex.find(referrerString)
+        val deeplinkIdMatch = deeplinkIdRegex.find(referrerString)
+        
+        val fpId = fpIdMatch?.groupValues?.get(1)
+        val deeplinkId = deeplinkIdMatch?.groupValues?.get(1)
+        
+        log("Parsed fpId: $fpId, deeplinkId: $deeplinkId")
+        
+        return Pair(fpId, deeplinkId)
+    }
+
+    private suspend fun lookupReferrerData(fpId: String?, deeplinkId: String?): DeeplinkMatch? {
+        if (fpId == null && deeplinkId == null) {
+            return null
+        }
+        
+        val queryParam = if (fpId != null) "fp_id=$fpId" else "deeplink_id=$deeplinkId"
+        val endpoint = "referrer-lookup?$queryParam"
+        
+        log("Looking up referrer data with endpoint: $endpoint")
+        
+        return makeRequest(endpoint)?.let { response ->
+            try {
+                val lookupResponse = gson.fromJson(response, ReferrerLookupResponse::class.java)
+                if (lookupResponse.success) {
+                    log("Referrer lookup successful: ${lookupResponse.deeplink}")
+                    lookupResponse.deeplink
+                } else {
+                    log("Referrer lookup failed: ${lookupResponse.message}")
+                    null
+                }
+            } catch (e: Exception) {
+                warn("Failed to parse referrer lookup response", e)
+                null
+            }
+        }
+    }
+
+    private fun cacheReferrerData(referrerData: ReferrerData) {
+        try {
+            val json = gson.toJson(referrerData)
+            sharedPreferences.edit()
+                .putString("referrer_data", json)
+                .putLong("processed_at", System.currentTimeMillis())
+                .apply()
+            log("Cached referrer data")
+        } catch (e: Exception) {
+            warn("Failed to cache referrer data", e)
+        }
+    }
+
+    private fun getCachedReferrerData(): ReferrerData? {
+        return try {
+            val json = sharedPreferences.getString("referrer_data", null)
+            if (json != null) {
+                val data = gson.fromJson(json, ReferrerData::class.java)
+                log("Retrieved cached referrer data: $data")
+                data
+            } else {
+                log("No cached referrer data found")
+                null
+            }
+        } catch (e: Exception) {
+            warn("Failed to retrieve cached referrer data", e)
+            null
+        }
+    }
+
+    private fun hasProcessedReferrer(): Boolean {
+        return sharedPreferences.contains("referrer_data")
+    }
+
+    private suspend fun processInstallReferrer() {
+        if (hasProcessedReferrer()) {
+            log("Install referrer already processed")
+            referrerData = getCachedReferrerData()
+            return
+        }
+        
+        log("Processing install referrer...")
+        
+        val referrerString = fetchInstallReferrer()
+        if (referrerString.isNullOrEmpty()) {
+            log("No install referrer found")
+            return
+        }
+        
+        val (fpId, deeplinkId) = parseReferrerString(referrerString)
+        if (fpId == null && deeplinkId == null) {
+            log("No valid referrer parameters found")
+            return
+        }
+        
+        val deeplinkData = lookupReferrerData(fpId, deeplinkId)
+        
+        val referrerData = ReferrerData(
+            referrerString = referrerString,
+            fpId = fpId,
+            deeplinkId = deeplinkId,
+            deeplinkData = deeplinkData,
+            processedAt = System.currentTimeMillis()
+        )
+        
+        this.referrerData = referrerData
+        cacheReferrerData(referrerData)
+        
+        log("Install referrer processing complete")
     }
 
     private fun simpleHash(str: String): String {
@@ -334,10 +530,40 @@ class DLN private constructor(
             log("Init response:", response)
             log("Valid domains:", validDomains)
         }
+        
+        // Process install referrer for deferred deep linking
+        processInstallReferrer()
+        
+        // Register any pending callback
+        registerPendingCallback()
+    }
+
+    private fun registerPendingCallback() {
+        Companion.pendingCallback?.let { callback ->
+            log("Registering pending deep link callback")
+            setDeepLinkCallbackInternal(callback)
+            Companion.pendingCallback = null
+        }
     }
 
     fun isValidDomain(domain: String): Boolean {
-        return validDomains.contains(domain)
+        // Check exact matches first (for custom domains)
+        if (validDomains.contains(domain)) {
+            return true
+        }
+        
+        // Check if it's a subdomain of deeplinknow.com
+        if (domain.endsWith(".deeplinknow.com") || domain == "deeplinknow.com") {
+            return true
+        }
+        
+        // Check if it's a subdomain of deeplink.now
+        if (domain.endsWith(".deeplink.now") || domain == "deeplink.now") {
+            return true
+        }
+        
+        log("Domain '$domain' is not valid. Valid domains: $validDomains")
+        return false
     }
 
     fun parseDeepLink(url: String): Pair<String, Map<String, String>>? {
@@ -357,6 +583,65 @@ class DLN private constructor(
             Pair(uri.path ?: "", parameters)
         } catch (e: Exception) {
             null
+        }
+    }
+
+    private fun setDeepLinkCallbackInternal(callback: DeepLinkCallback?) {
+        deepLinkCallback = callback
+        log("Deep link callback ${if (callback != null) "registered" else "removed"}")
+    }
+
+    private fun handleDeepLinkInternal(url: String): Boolean {
+        log("Handling deep link: $url")
+        
+        try {
+            val uri = Uri.parse(url)
+            val host = uri.host ?: ""
+            
+            // Check if it's a valid domain (deeplinknow.com or custom domains)
+            if (!isValidDomain(host)) {
+                log("Invalid domain: $host")
+                return false
+            }
+            
+            log("Deep link captured from valid domain: $host")
+            
+            // Extract route (path without leading slash)
+            val route = uri.path?.removePrefix("/") ?: ""
+            
+            // Extract parameters from query string
+            val params = mutableMapOf<String, String>()
+            uri.queryParameterNames.forEach { key ->
+                uri.getQueryParameter(key)?.let { value ->
+                    params[key] = value
+                }
+            }
+            
+            log("Parsed route: '$route', params: $params")
+            
+            // Create deep link data
+            val deepLinkData = DeepLinkData(
+                route = route,
+                params = params
+            )
+            
+            // Trigger callback if registered
+            deepLinkCallback?.let { callback ->
+                try {
+                    callback.onDeepLinkOpen(deepLinkData)
+                    log("Deep link callback triggered successfully")
+                } catch (e: Exception) {
+                    warn("Error in deep link callback", e)
+                }
+            } ?: run {
+                log("No deep link callback registered")
+            }
+            
+            return true
+            
+        } catch (e: Exception) {
+            warn("Error handling deep link", e)
+            return false
         }
     }
 
@@ -405,9 +690,7 @@ class DLN private constructor(
             if (clipData != null && clipData.itemCount > 0) {
                 val content = clipData.getItemAt(0).text?.toString()
                 val domain = content?.split("://")?.getOrNull(1)?.split("/")?.getOrNull(0)
-                if (domain != null && (domain.contains("deeplinknow.com") || 
-                    domain.contains("deeplink.now") || 
-                    isValidDomain(domain))) {
+                if (domain != null && isValidDomain(domain)) {
                     log("Found deep link token in clipboard")
                     content
                 } else {
@@ -422,6 +705,32 @@ class DLN private constructor(
         }
     }
 
+    fun getDeferredDeepLink(): DeeplinkMatch? {
+        log("Getting deferred deep link data")
+        
+        // If referrer data hasn't been loaded yet, try to get it from cache
+        if (referrerData == null) {
+            referrerData = getCachedReferrerData()
+        }
+        
+        return referrerData?.deeplinkData?.also {
+            log("Found deferred deep link: $it")
+        }
+    }
+
+    fun getReferrerData(): ReferrerData? {
+        log("Getting referrer data")
+        
+        // If referrer data hasn't been loaded yet, try to get it from cache
+        if (referrerData == null) {
+            referrerData = getCachedReferrerData()
+        }
+        
+        return referrerData?.also {
+            log("Found referrer data: $it")
+        }
+    }
+
     private fun isInitialized(): Boolean {
         return instance?.get() != null
     }
@@ -429,6 +738,7 @@ class DLN private constructor(
     companion object {
         // Use a WeakReference to prevent memory leaks
         private var instance: WeakReference<DLN>? = null
+        private var pendingCallback: DeepLinkCallback? = null
 
         @JvmStatic
         @JvmOverloads
@@ -462,6 +772,27 @@ class DLN private constructor(
         @JvmStatic
         fun getInstance(): DLN {
             return instance?.get() ?: throw IllegalStateException("DLN not initialized")
+        }
+
+        @JvmStatic
+        fun setDeepLinkCallback(callback: DeepLinkCallback?) {
+            try {
+                // Try to set the callback on the initialized instance
+                getInstance().setDeepLinkCallbackInternal(callback)
+            } catch (e: IllegalStateException) {
+                // If not initialized yet, store the callback for later
+                pendingCallback = callback
+            }
+        }
+
+        @JvmStatic
+        fun handleDeepLink(url: String): Boolean {
+            return try {
+                getInstance().handleDeepLinkInternal(url)
+            } catch (e: IllegalStateException) {
+                // If not initialized yet, we can't handle the deep link
+                false
+            }
         }
     }
 }
