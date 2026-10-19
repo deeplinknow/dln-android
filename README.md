@@ -8,13 +8,13 @@ DeepLinkNow is not an analytics or attribution SDK. It never reads the advertisi
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.1.0")
+    implementation("com.deeplinknow:dln-android:1.2.0")
 }
 ```
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:dln-android:1.1.0'
+    implementation 'com.deeplinknow:dln-android:1.2.0'
 }
 ```
 
@@ -106,7 +106,11 @@ The 1.1 APIs return `Result`. Failures are a `DLNException` with one of these `c
 - `NETWORK`
 - `INVALID_RESPONSE`
 
-The SDK never throws into your app.
+The SDK never throws into your app. "No link" (`null`) and a failure both let your app carry on to its normal start screen. Failures are logged as warnings, and the last one is kept in `DLN.lastError` (`DLN.getLastError()` from Java) until the next successful call of the same kind (init, `checkDeferredDeepLink`, `findDeferredUser`):
+
+```kotlin
+DLN.lastError?.let { Log.w("MyApp", "DLN: ${it.code.value}") }
+```
 
 ## Upgrading from 1.0.x
 

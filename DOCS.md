@@ -18,7 +18,7 @@ It also parses App Links that open an already-installed app, so deferred and dir
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.1.0")
+    implementation("com.deeplinknow:dln-android:1.2.0")
 }
 ```
 
@@ -26,7 +26,7 @@ dependencies {
 <dependency>
   <groupId>com.deeplinknow</groupId>
   <artifactId>dln-android</artifactId>
-  <version>1.1.0</version>
+  <version>1.2.0</version>
   <type>aar</type>
 </dependency>
 ```
@@ -58,7 +58,7 @@ class MyApplication : Application() {
 
 - `DLN.init` returns immediately. It stores only the application context and keeps a process-wide singleton.
 - It calls `POST /api/v1/sdk/init` once and starts reading the Install Referrer.
-- Calling it again with the same key reuses the running or completed init. A different key replaces the previous state.
+- Calling it again with the same key and options reuses the running or completed init (a failed init is retried). A different key or any different option (`baseUrl`, `enableLogs`, timeouts, …) replaces the previous state and calls `/init` again. A callback set with `DLN.setDeepLinkCallback` carries over.
 - You can observe the outcome three ways:
   - the `onComplete` callback
   - `DLN.awaitInitialization()` (suspend, returns `Result<DLNAppInfo>`)
@@ -138,6 +138,15 @@ DLN does not choose a threshold for you. Fingerprints are best effort: iOS hides
 
 The SDK runs its background work in its own coroutine scope and never throws into your app.
 
+### `DLN.lastError`
+
+`DLN.lastError: DLNException?` (Java: `DLN.getLastError()`) holds the error of the last failed init, `checkDeferredDeepLink` (any overload) or `findDeferredUserResult` / `findDeferredUser`. The next successful call of the same kind clears it, and "no link found" counts as a success. It is handy when you use the callback API or `getOrNull()` and only want to log why nothing came back:
+
+```kotlin
+val link = DLN.checkDeferredDeepLink().getOrNull()
+if (link == null) DLN.lastError?.let { Log.w("MyApp", "DLN: ${it.code.value}") }
+```
+
 ## Lower-level APIs
 
 | API | Notes |
@@ -146,6 +155,7 @@ The SDK runs its background work in its own coroutine scope and never throws int
 | `getInstance().findDeferredUser()` | 1.0 API: `MatchResponse?` (null on any error) |
 | `getInstance().getDeferredDeepLink()` | 1.0 API: the cached referrer `DeeplinkMatch?`, returned on every launch |
 | `getInstance().getReferrerData()` | The raw referrer result (`referrerString`, `fpId`, `deeplinkId`, `deeplinkData`, `processedAt`) |
+| `DLN.awaitReferrer()` | Suspend: waits for the Install Referrer step started by `init`, then returns `getReferrerData()` (`null` before `init` or when there is no result) |
 | `getInstance().checkClipboard()` | Returns the clipboard text only if, trimmed, it is exactly one http(s) URL on your link domains. Returns null without focus (Android 10+). On Android 12+ reading shows a system "pasted" toast, so call it only when you need it |
 | `getInstance().hasDeepLinkToken()` | Checks the clip description only (no toast). True means it is worth calling `checkClipboard()` |
 | `DLN.parseDeepLink(url)` | `ParsedDeepLink(path, queryParams, fullPath, url)` or null |

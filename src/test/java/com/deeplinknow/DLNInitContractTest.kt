@@ -413,6 +413,113 @@ class DLNInitContractTest {
     }
 
     @Test
+    fun `SDK-07 AND-09 the same key with a different config replaces the instance and calls init again`() {
+        val inits = AtomicInteger()
+        server.dispatcher = routingDispatcher(
+            mapOf("/api/v1/sdk/init" to { inits.incrementAndGet(); json(initResponse()) })
+        )
+        DLN.init(context, DLNTestSupport.TEST_API_KEY, baseUrl = serverBaseUrl())
+        runBlocking { DLN.awaitInitialization() }
+        val first = DLN.getInstance()
+
+        DLN.init(context, DLNTestSupport.TEST_API_KEY, enableLogs = true, retryAttempts = 0, baseUrl = serverBaseUrl())
+        val second = DLN.getInstance()
+        assertTrue(first !== second)
+        assertTrue(second.config.enableLogs)
+        assertEquals(0, second.config.retryAttempts)
+        assertTrue(runBlocking { DLN.awaitInitialization() }.isSuccess)
+        assertEquals(2, inits.get())
+
+        // the identical config again reuses the instance
+        DLN.init(context, DLNTestSupport.TEST_API_KEY, enableLogs = true, retryAttempts = 0, baseUrl = serverBaseUrl())
+        runBlocking { DLN.awaitInitialization() }
+        assertTrue(second === DLN.getInstance())
+        assertEquals(2, inits.get())
+    }
+
+    private fun recordingCallback(received: MutableList<DeepLinkData>) = object : DeepLinkCallback {
+        override fun onDeepLinkOpen(deepLinkData: DeepLinkData) {
+            received += deepLinkData
+        }
+    }
+
+    @Test
+    fun `AND-33 SDK-07 the deep link callback survives a re-init with another key`() {
+        server.dispatcher = routingDispatcher(mapOf("/api/v1/sdk/init" to { json(initResponse()) }))
+        DLN.init(context, "key-one", baseUrl = serverBaseUrl())
+        val received = mutableListOf<DeepLinkData>()
+        DLN.setDeepLinkCallback(recordingCallback(received))
+        DLN.init(context, "key-two", baseUrl = serverBaseUrl())
+        runBlocking { DLN.awaitInitialization() }
+        assertTrue(DLN.handleDeepLink("https://myapp.deeplinknow.com/promo?code=SAVE20"))
+        assertEquals(1, received.size)
+        assertEquals("/promo", received[0].path)
+    }
+
+    @Test
+    fun `AND-33 the deep link callback survives the retry after a failed init`() {
+        var fail = true
+        server.dispatcher = routingDispatcher(
+            mapOf("/api/v1/sdk/init" to { if (fail) json("{}", 503) else json(initResponse()) })
+        )
+        DLN.init(context, DLNTestSupport.TEST_API_KEY, baseUrl = serverBaseUrl(), retryAttempts = 0)
+        assertTrue(runBlocking { DLN.awaitInitialization() }.isFailure)
+        val received = mutableListOf<DeepLinkData>()
+        DLN.setDeepLinkCallback(recordingCallback(received))
+        fail = false
+        DLN.init(context, DLNTestSupport.TEST_API_KEY, baseUrl = serverBaseUrl(), retryAttempts = 0)
+        assertTrue(runBlocking { DLN.awaitInitialization() }.isSuccess)
+        assertTrue(DLN.handleDeepLink("https://myapp.deeplinknow.com/promo"))
+        assertEquals(1, received.size)
+    }
+
+    private fun idleMainUntil(timeoutMs: Long = 5_000, done: () -> Boolean) {
+        val deadline = System.currentTimeMillis() + timeoutMs
+        while (!done() && System.currentTimeMillis() < deadline) {
+            shadowOf(Looper.getMainLooper()).idle()
+            Thread.sleep(10)
+        }
+        Thread.sleep(50)
+        shadowOf(Looper.getMainLooper()).idle()
+    }
+
+    @Test
+    fun `AND-31 SDK-56 onComplete fires once on the main thread when a later init replaces the instance`() {
+        server.dispatcher = routingDispatcher(
+            mapOf("/api/v1/sdk/init" to { json(initResponse()).setHeadersDelay(300, TimeUnit.MILLISECONDS) })
+        )
+        val first = mutableListOf<Result<DLNAppInfo>>()
+        val second = mutableListOf<Result<DLNAppInfo>>()
+        var onMain = true
+        DLN.init(context, "key-one", baseUrl = serverBaseUrl(), onComplete = {
+            onMain = onMain && Looper.myLooper() == Looper.getMainLooper()
+            first += it
+        })
+        DLN.init(context, "key-two", baseUrl = serverBaseUrl(), onComplete = { second += it })
+        idleMainUntil { first.isNotEmpty() && second.isNotEmpty() }
+        assertEquals(1, first.size)
+        assertEquals(1, second.size)
+        assertTrue(onMain)
+        assertTrue(second[0].isSuccess)
+    }
+
+    @Test
+    fun `AND-31 SDK-56 the checkDeferredDeepLink callback fires once when a later init replaces the instance`() {
+        server.dispatcher = routingDispatcher(
+            mapOf(
+                "/api/v1/sdk/init" to { json(initResponse()).setHeadersDelay(300, TimeUnit.MILLISECONDS) },
+                "/api/v1/sdk/match" to { json(DLNTestSupport.matchResponse()) },
+            )
+        )
+        DLN.init(context, "key-one", baseUrl = serverBaseUrl())
+        val results = mutableListOf<Result<DeferredDeepLink?>>()
+        DLN.checkDeferredDeepLink { results += it }
+        DLN.init(context, "key-two", baseUrl = serverBaseUrl())
+        idleMainUntil { results.isNotEmpty() }
+        assertEquals(1, results.size)
+    }
+
+    @Test
     fun `AND-09 deprecated initializeSDK reuses the running init instead of a second request`() {
         server.enqueue(json(initResponse()))
         val dln = newDln(context)

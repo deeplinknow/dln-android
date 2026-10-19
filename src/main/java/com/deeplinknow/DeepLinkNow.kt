@@ -31,6 +31,7 @@ import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.MediaType.Companion.toMediaType
@@ -381,6 +382,12 @@ class DLN internal constructor(
     /** Base delay between Install Referrer connection attempts. Shrunk in tests. */
     internal var referrerRetryDelayMs = 1_000L
 
+    /**
+     * Upper bound for one Install Referrer connection attempt (AND-30): a bound service that
+     * never connects calls neither listener method. Shrunk in tests.
+     */
+    internal var referrerConnectTimeoutMs = 5_000L
+
     /** Wall clock for the init cache (SDK-83). Replaced in tests. */
     internal var now: () -> Long = { System.currentTimeMillis() }
 
@@ -467,6 +474,9 @@ class DLN internal constructor(
         } catch (e: CancellationException) {
             if (!currentCoroutineContext().isActive) throw e
             Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e))
+        } catch (e: Exception) {
+            // SDK-85: runInit catches everything, but never let an internal failure reach the app.
+            Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e))
         }
     }
 
@@ -496,24 +506,22 @@ class DLN internal constructor(
     }
 
     private suspend fun runInit(): Result<DLNAppInfo> {
-        val cached = if (claimInitCache()) readInitCache() else null
-        val result: Result<DLNAppInfo> = if (cached != null) {
-            log("init: from the device cache (no /init request)")
-            Result.success(applyInit(cached))
-        } else try {
-            log("init: POST /api/v1/sdk/init")
-            val response = execute("POST", "init", body = initBody())
-            if (response.code !in 200..299) {
-                val error = errorFor(response)
-                if (error.code == DLNErrorCode.INVALID_API_KEY || error.code == DLNErrorCode.ACCOUNT_INACTIVE) {
-                    clearInitCache()
-                }
-                Result.failure(error)
+        val result: Result<DLNAppInfo> = try {
+            val cached = if (claimInitCache()) readInitCache() else null
+            if (cached != null) {
+                log("init: from the device cache (no /init request)")
+                Result.success(applyInit(cached))
             } else {
-                val parsed = DLNJson.decodeInitResponse(DLNJson.parse(response.body))
-                val info = applyInit(parsed)
-                writeInitCache(response.body.orEmpty())
-                Result.success(info)
+                log("init: POST /api/v1/sdk/init")
+                val response = execute("POST", "init", body = initBody())
+                if (response.code !in 200..299) {
+                    Result.failure(errorFor(response).also { clearInitCacheOnAuthFailure(it) })
+                } else {
+                    val parsed = DLNJson.decodeInitResponse(DLNJson.parse(response.body))
+                    val info = applyInit(parsed)
+                    writeInitCache(response.body.orEmpty())
+                    Result.success(info)
+                }
             }
         } catch (e: CancellationException) {
             throw e
@@ -525,6 +533,7 @@ class DLN internal constructor(
             Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
         }
         initOutcome = result
+        recordOutcome(ErrorKind.INIT, result)
         result.fold(
             onSuccess = { log("init: ok, link domains ${it.linkDomains}") },
             onFailure = { warn("Initialization failed: ${it.message}") },
@@ -596,6 +605,17 @@ class DLN internal constructor(
             initCacheFile.delete()
         } catch (e: Exception) {
             // ignore
+        }
+    }
+
+    /**
+     * SDK-83: a 401 invalid key or 403 inactive account from any endpoint (init, match,
+     * referrer-lookup) deletes the cache, so a revoked key stops initializing from it.
+     */
+    private fun clearInitCacheOnAuthFailure(error: DLNException) {
+        if (error.code == DLNErrorCode.INVALID_API_KEY || error.code == DLNErrorCode.ACCOUNT_INACTIVE) {
+            log("${error.code.value}: clearing the init cache")
+            clearInitCache()
         }
     }
 
@@ -829,7 +849,7 @@ class DLN internal constructor(
                     definitive(null)
                 }
                 else -> {
-                    val error = errorFor(response)
+                    val error = errorFor(response).also { clearInitCacheOnAuthFailure(it) }
                     log("referrer: lookup failed (${error.code.value}), will retry")
                     ReferrerOutcome.Transient(error)
                 }
@@ -851,14 +871,25 @@ class DLN internal constructor(
         return RawReferrer.Transient
     }
 
-    /** Resumes exactly once and ends the connection in every path (AND-13). */
+    /**
+     * Resumes exactly once and ends the connection in every path (AND-13), within
+     * [referrerConnectTimeoutMs] (AND-30: a timeout is transient).
+     */
     private suspend fun readReferrerOnce(): RawReferrer {
         val referrerClient = try {
             InstallReferrerClient.newBuilder(appContext).build()
         } catch (e: Exception) {
             return RawReferrer.Unsupported
         }
-        return suspendCancellableCoroutine { continuation ->
+        return withTimeoutOrNull(referrerConnectTimeoutMs) { connectReferrer(referrerClient) } ?: run {
+            log("referrer: no answer from the referrer service within ${referrerConnectTimeoutMs}ms")
+            RawReferrer.Transient
+        }
+    }
+
+    /** One connection; cancellation (the AND-30 timeout included) ends it. */
+    private suspend fun connectReferrer(referrerClient: InstallReferrerClient): RawReferrer =
+        suspendCancellableCoroutine { continuation ->
             val done = AtomicBoolean(false)
             fun finish(result: RawReferrer) {
                 if (!done.compareAndSet(false, true)) return
@@ -891,7 +922,10 @@ class DLN internal constructor(
                                 }
                                 finish(RawReferrer.Value(value))
                             }
-                            InstallReferrerClient.InstallReferrerResponse.FEATURE_NOT_SUPPORTED ->
+                            // PERMISSION_ERROR: the library caught a SecurityException while
+                            // binding (a ROM that forbids it). Definitive, like "not supported".
+                            InstallReferrerClient.InstallReferrerResponse.FEATURE_NOT_SUPPORTED,
+                            InstallReferrerClient.InstallReferrerResponse.PERMISSION_ERROR ->
                                 finish(RawReferrer.Unsupported)
                             else -> finish(RawReferrer.Transient)
                         }
@@ -902,13 +936,12 @@ class DLN internal constructor(
                     }
                 })
             } catch (e: SecurityException) {
-                // Some ROMs forbid binding to the Play Store service: treat like "not supported".
+                // Defensive: the library reports PERMISSION_ERROR itself, but don't rely on it.
                 finish(RawReferrer.Unsupported)
             } catch (e: Exception) {
                 finish(RawReferrer.Transient)
             }
         }
-    }
 
     // ---- Local state (SDK-23..26, SDK-65, AND-22) ----
 
@@ -1248,7 +1281,7 @@ class DLN internal constructor(
             log("fingerprint: POST /api/v1/sdk/match")
             val response = execute("POST", "match", body = body)
             if (response.code !in 200..299) {
-                Result.failure(errorFor(response))
+                Result.failure(errorFor(response).also { clearInitCacheOnAuthFailure(it) })
             } else {
                 val parsed = DLNJson.decodeMatchResponse(DLNJson.parse(response.body))
                 val best = parsed.matches.firstOrNull()
@@ -1274,17 +1307,20 @@ class DLN internal constructor(
      * Waits for init; reports `notInitialized` after a failed init. Never throws.
      */
     suspend fun findDeferredUserResult(): Result<MatchResponse> {
-        return try {
+        val result = try {
             val init = awaitInit()
             if (init.isFailure) {
-                return Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = init.exceptionOrNull()))
+                Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = init.exceptionOrNull()))
+            } else {
+                requestMatches()
             }
-            requestMatches()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
             Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
         }
+        result.exceptionOrNull()?.let { warn("findDeferredUser failed: ${it.message}") }
+        return recordOutcome(ErrorKind.FIND, result)
     }
 
     /**
@@ -1293,13 +1329,15 @@ class DLN internal constructor(
      */
     suspend fun findDeferredUser(): MatchResponse? {
         log("Finding deferred user...")
-        return try {
-            requestMatches().getOrNull()
+        val result = try {
+            requestMatches()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            null
+            Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
         }
+        result.exceptionOrNull()?.let { warn("findDeferredUser failed: ${it.message}") }
+        return recordOutcome(ErrorKind.FIND, result).getOrNull()
     }
 
     // ---- Domains and parsing (SDK-30..38, AND-25..27) ----
@@ -1439,20 +1477,21 @@ class DLN internal constructor(
      * The cached, definitive Install Referrer result (unchanged 1.0 meaning: returned on every
      * launch). Use [DLN.checkDeferredDeepLink] for first-launch delivery.
      */
-    fun getDeferredDeepLink(): DeeplinkMatch? {
-        if (referrerData == null) referrerData = loadState().referrerData
-        return referrerData?.deeplinkData
-    }
+    fun getDeferredDeepLink(): DeeplinkMatch? = getReferrerData()?.deeplinkData
 
     /** The cached raw Install Referrer result (`fp_id` / `deeplink_id`), or null. */
     fun getReferrerData(): ReferrerData? {
-        if (referrerData == null) referrerData = loadState().referrerData
-        return referrerData
+        return try {
+            if (referrerData == null) referrerData = loadState().referrerData
+            referrerData
+        } catch (e: Exception) {
+            null
+        }
     }
 
     companion object {
         /** SDK version, kept in sync with build.gradle.kts (AND-01). */
-        const val SDK_VERSION = "1.1.0"
+        const val SDK_VERSION = "1.2.0"
 
         private const val TAG = "DLN"
         private const val INIT_CACHE_FILE = "com.deeplinknow.initcache.json"
@@ -1477,7 +1516,10 @@ class DLN internal constructor(
 
         private val lock = Any()
 
-        /** For callback variants when no instance exists. */
+        /**
+         * Callback variants run here, not in an instance's scope, so a later [init] that replaces
+         * the instance can't cancel them: each callback fires exactly once (AND-31).
+         */
         private val sdkScope = CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
                 Log.w(TAG, "Unexpected internal error: ${e.javaClass.simpleName}")
@@ -1498,10 +1540,52 @@ class DLN internal constructor(
 
         private fun notInitialized() = DLNException(DLNErrorCode.NOT_INITIALIZED)
 
+        /** Which kind of call recorded [lastError]; a success of the same kind clears it (SDK-85). */
+        internal enum class ErrorKind { INIT, CHECK, FIND }
+
+        private val errorLock = Any()
+
+        @Volatile
+        private var lastErrorValue: DLNException? = null
+
+        @Volatile
+        private var lastErrorKind: ErrorKind? = null
+
+        /**
+         * The typed error (SDK-55) of the last failed init, [checkDeferredDeepLink] or
+         * [findDeferredUserResult] / `findDeferredUser` (SDK-85). Cleared by the next successful
+         * call of the same kind; "no link found" is a success. Java: `DLN.getLastError()`.
+         */
+        @JvmStatic
+        val lastError: DLNException?
+            get() = lastErrorValue
+
+        /** Records [result] for [lastError] and returns it unchanged. */
+        internal fun <T> recordOutcome(kind: ErrorKind, result: Result<T>): Result<T> {
+            synchronized(errorLock) {
+                val error = result.exceptionOrNull()
+                if (error == null) {
+                    if (lastErrorKind == kind) {
+                        lastErrorValue = null
+                        lastErrorKind = null
+                    }
+                } else {
+                    lastErrorValue = error as? DLNException ?: DLNException(DLNErrorCode.INVALID_RESPONSE, cause = error)
+                    lastErrorKind = kind
+                }
+            }
+            return result
+        }
+
+        private fun warnCheckFailure(result: Result<DeferredDeepLink?>) {
+            result.exceptionOrNull()?.let { Log.w(TAG, "checkDeferredDeepLink failed: ${it.message}") }
+        }
+
         /**
          * Starts the SDK. Returns immediately (AND-05): init and Install Referrer processing run
-         * in the background. Calling again with the same key reuses the running/completed init
-         * (unless it failed); a different key replaces the previous state (SDK-07).
+         * in the background. Calling again with the same configuration reuses the running or
+         * completed init (unless it failed); any other configuration replaces the previous state
+         * (SDK-07). The deep link callback carries over to the replacement.
          *
          * @param onComplete called once on the main thread with the init outcome (AND-06).
          */
@@ -1520,36 +1604,43 @@ class DLN internal constructor(
             onComplete: ((Result<DLNAppInfo>) -> Unit)? = null,
         ) {
             try {
+                val config = DLNConfig(
+                    apiKey = apiKey,
+                    enableLogs = enableLogs,
+                    overrideScreenWidth = overrideScreenWidth,
+                    overrideScreenHeight = overrideScreenHeight,
+                    overridePixelRatio = overridePixelRatio,
+                    baseUrl = baseUrl,
+                    timeoutMs = timeoutMs,
+                    retryAttempts = retryAttempts,
+                )
                 val dln = synchronized(lock) {
                     val existing = instance
-                    if (existing != null && existing.config.apiKey == apiKey && !existing.initFailed) {
+                    if (existing != null && existing.config == config && !existing.initFailed) {
                         existing
                     } else {
                         existing?.shutdown()
-                        DLN(
-                            DLNConfig(
-                                apiKey = apiKey,
-                                enableLogs = enableLogs,
-                                overrideScreenWidth = overrideScreenWidth,
-                                overrideScreenHeight = overrideScreenHeight,
-                                overridePixelRatio = overridePixelRatio,
-                                baseUrl = baseUrl,
-                                timeoutMs = timeoutMs,
-                                retryAttempts = retryAttempts,
-                            ),
-                            context.applicationContext ?: context,
-                        ).also { instance = it }
+                        DLN(config, context.applicationContext ?: context).also { replacement ->
+                            // AND-33: the app registered its callback once; keep it.
+                            existing?.deepLinkCallback?.let { replacement.deepLinkCallback = it }
+                            instance = replacement
+                        }
                     }
                 }
                 dln.start()
                 if (onComplete != null) {
-                    dln.scope.launch {
-                        val result = dln.awaitInit()
+                    sdkScope.launch {
+                        val result = try {
+                            dln.awaitInit()
+                        } catch (e: Exception) {
+                            Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e))
+                        }
                         postMain { onComplete(result) }
                     }
                 }
             } catch (e: Exception) {
                 Log.w(TAG, "DLN.init failed: ${e.javaClass.simpleName}")
+                recordOutcome(ErrorKind.INIT, Result.failure<Unit>(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e)))
                 onComplete?.let { cb -> postMain { cb(Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e))) } }
             }
         }
@@ -1576,13 +1667,15 @@ class DLN internal constructor(
             minConfidence: Double? = null,
             force: Boolean = false,
         ): Result<DeferredDeepLink?> {
-            return try {
+            val result = try {
                 instance?.checkDeferred(minConfidence, force) ?: Result.failure(notInitialized())
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
                 Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
             }
+            warnCheckFailure(result)
+            return recordOutcome(ErrorKind.CHECK, result)
         }
 
         /** Callback variant of [checkDeferredDeepLink]; [callback] runs once on the main thread. */
@@ -1594,8 +1687,14 @@ class DLN internal constructor(
             callback: (Result<DeferredDeepLink?>) -> Unit,
         ) {
             val dln = instance
-            (dln?.scope ?: sdkScope).launch {
-                val result = checkDeferredDeepLink(minConfidence, force)
+            sdkScope.launch {
+                val result = try {
+                    dln?.checkDeferred(minConfidence, force) ?: Result.failure(notInitialized())
+                } catch (e: Exception) {
+                    Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
+                }
+                warnCheckFailure(result)
+                recordOutcome(ErrorKind.CHECK, result)
                 postMain { callback(result) }
             }
         }
@@ -1614,6 +1713,23 @@ class DLN internal constructor(
             }
         }
 
+        /**
+         * Waits for the current instance's Install Referrer step (started by [init]) to finish,
+         * then returns [DLN.getReferrerData] (AND-32). Null before [init], or when there is no
+         * definitive referrer result. Never throws. Used by the React Native wrapper.
+         */
+        suspend fun awaitReferrer(): ReferrerData? {
+            val dln = instance ?: return null
+            return try {
+                dln.awaitReferrer()
+                dln.getReferrerData()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                null
+            }
+        }
+
         /** Clears the first-launch flag and the cached referrer result (SDK-26). For testing. */
         @JvmStatic
         fun resetDeferredDeepLink() {
@@ -1625,8 +1741,10 @@ class DLN internal constructor(
         }
 
         /** Static form of [DLN.findDeferredUserResult]; `notInitialized` before [init]. */
-        suspend fun findDeferredUserResult(): Result<MatchResponse> =
-            instance?.findDeferredUserResult() ?: Result.failure(notInitialized())
+        suspend fun findDeferredUserResult(): Result<MatchResponse> {
+            val dln = instance ?: return recordOutcome(ErrorKind.FIND, Result.failure(notInitialized()))
+            return dln.findDeferredUserResult()
+        }
 
         /**
          * Parses a link on the app's domains (SDK-30): `{path, queryParams, fullPath, url}` or
@@ -1652,8 +1770,11 @@ class DLN internal constructor(
 
         @JvmStatic
         fun setDeepLinkCallback(callback: DeepLinkCallback?) {
-            val dln = instance
-            if (dln != null) dln.setDeepLinkCallbackInternal(callback) else pendingCallback = callback
+            // Under the init lock so a concurrent replacement can't drop it (AND-33).
+            synchronized(lock) {
+                val dln = instance
+                if (dln != null) dln.setDeepLinkCallbackInternal(callback) else pendingCallback = callback
+            }
         }
 
         @JvmStatic
@@ -1668,6 +1789,10 @@ class DLN internal constructor(
                 instance = null
                 pendingCallback = null
                 initCacheConsulted = false
+            }
+            synchronized(errorLock) {
+                lastErrorValue = null
+                lastErrorKind = null
             }
         }
     }

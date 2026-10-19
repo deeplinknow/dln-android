@@ -131,6 +131,43 @@ class DLNInitCacheTest {
     }
 
     @Test
+    fun `SDK-83 a 401 from match clears the cache`() {
+        val dln = launch()
+        assertTrue(cacheFile().exists())
+        server.enqueue(json("""{"error":"Invalid API key"}""", 401))
+        val result = runBlocking { dln.findDeferredUserResult() }
+        assertEquals(DLNErrorCode.INVALID_API_KEY, (result.exceptionOrNull() as DLNException).code)
+        assertFalse(cacheFile().exists())
+    }
+
+    @Test
+    fun `SDK-83 a 403 inactive account from referrer-lookup clears the cache`() {
+        unmockkAll()
+        mockInstallReferrer(referrer = "fp_id=${DLNTestSupport.FP_ID}")
+        server.dispatcher = DLNTestSupport.routingDispatcher(
+            mapOf(
+                "/api/v1/sdk/init" to { json(initResponse()) },
+                // after /init has written the cache
+                "/api/v1/sdk/referrer-lookup" to {
+                    json("""{"error":"Account is not active"}""", 403).setHeadersDelay(300, java.util.concurrent.TimeUnit.MILLISECONDS)
+                },
+            )
+        )
+        val dln = launch(enqueue = false)
+        assertTrue(runBlocking { dln.awaitInit() }.isSuccess)
+        assertFalse(cacheFile().exists())
+    }
+
+    @Test
+    fun `SDK-83 a 403 for credits from match keeps the cache`() {
+        val dln = launch()
+        server.enqueue(json("""{"error":"Insufficient credits"}""", 403))
+        val result = runBlocking { dln.findDeferredUserResult() }
+        assertEquals(DLNErrorCode.NO_CREDITS, (result.exceptionOrNull() as DLNException).code)
+        assertTrue(cacheFile().exists())
+    }
+
+    @Test
     fun `SDK-83 SDK-26 resetDeferredDeepLink clears the cache`() {
         val dln = launch()
         DLN.instance = dln

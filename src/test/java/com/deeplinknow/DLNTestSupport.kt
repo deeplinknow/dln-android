@@ -54,8 +54,12 @@ object DLNTestSupport {
         )
         dln.retryBaseDelayMs = 1
         dln.referrerRetryDelayMs = 1
+        created += dln
         return dln
     }
+
+    /** Every instance a test made, shut down by [resetStatics] so none keeps retrying into the next test. */
+    private val created = java.util.concurrent.CopyOnWriteArrayList<DLN>()
 
     /** Points the DLN instance at [server]. Returns the list of original (pre-rewrite) URLs. */
     fun redirectTo(dln: DLN, server: MockWebServer): MutableList<HttpUrl> {
@@ -87,6 +91,8 @@ object DLNTestSupport {
      * a cold start with [DLN.resetForTesting] instead, which keeps the cache.
      */
     fun resetStatics() {
+        created.forEach { it.shutdown() }
+        created.clear()
         DLN.resetForTesting()
         try {
             val context = androidx.test.core.app.ApplicationProvider.getApplicationContext<android.content.Context>()
@@ -125,6 +131,8 @@ object DLNTestSupport {
      * Mocks InstallReferrerClient.newBuilder(ctx).build() so that startConnection() immediately
      * calls back with [responseCode] and, for OK, returns [referrer] from getInstallReferrer().
      * [responseCodes] (if given) is consumed one per startConnection() call (for retry tests).
+     * [neverConnects] simulates a bound service that never connects: neither listener method
+     * is called (AND-30).
      */
     fun mockInstallReferrer(
         responseCode: Int = InstallReferrerClient.InstallReferrerResponse.OK,
@@ -133,6 +141,7 @@ object DLNTestSupport {
         startConnectionThrows: Throwable? = null,
         responseCodes: List<Int>? = null,
         disconnectInsteadOfSetup: Boolean = false,
+        neverConnects: Boolean = false,
     ): InstallReferrerClient {
         val details = mockk<ReferrerDetails>(relaxed = true)
         every { details.installReferrer } returns referrer
@@ -141,6 +150,8 @@ object DLNTestSupport {
         val codes = responseCodes?.toMutableList()
         if (startConnectionThrows != null) {
             every { client.startConnection(any()) } throws startConnectionThrows
+        } else if (neverConnects) {
+            every { client.startConnection(any()) } answers { }
         } else {
             every { client.startConnection(capture(listener)) } answers {
                 if (disconnectInsteadOfSetup) {

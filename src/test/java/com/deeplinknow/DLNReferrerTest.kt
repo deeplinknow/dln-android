@@ -239,13 +239,72 @@ class DLNReferrerTest {
     }
 
     @Test
-    fun `AND-08 AND-13 startConnection throwing SecurityException does not escape`() {
+    fun `AND-08 AND-14 PERMISSION_ERROR (the library's caught SecurityException) is definitive and not retried`() {
+        // installreferrer 2.2 catches the SecurityException from bindService itself and reports
+        // PERMISSION_ERROR (4) to the listener; it does not throw from startConnection.
+        val client = mockInstallReferrer(responseCode = InstallReferrerResponse.PERMISSION_ERROR)
+        val dln = runInit()
+        assertNull(dln.getDeferredDeepLink())
+        verify(exactly = 1) { client.startConnection(any()) }
+        verify { client.endConnection() }
+        assertTrue(dln.referrerOutcomeIsDefinitive())
+        assertTrue(lookupRequests().isEmpty())
+    }
+
+    @Test
+    fun `AND-08 AND-13 a SecurityException thrown by startConnection (defensive) does not escape`() {
         mockInstallReferrer(startConnectionThrows = SecurityException("Not allowed to bind to service"))
         try {
-            assertNull(runInit().getDeferredDeepLink())
+            val dln = runInit()
+            assertNull(dln.getDeferredDeepLink())
+            assertTrue(dln.referrerOutcomeIsDefinitive())
         } catch (e: SecurityException) {
             fail("referrer processing threw: $e")
         }
+    }
+
+    @Test
+    fun `AND-30 AND-13 a referrer service that never connects times out as transient and ends each connection`() {
+        val client = mockInstallReferrer(neverConnects = true)
+        val dln = newDln(context, retryAttempts = 0)
+        dln.referrerConnectTimeoutMs = 50
+        redirectTo(dln, server)
+        DLNTestSupport.setSingleton(dln)
+        runBlocking { kotlinx.coroutines.withTimeout(10_000) { dln.startAndAwait() } }
+        verify(exactly = 3) { client.startConnection(any()) }
+        verify(exactly = 3) { client.endConnection() }
+        assertTrue(!dln.referrerOutcomeIsDefinitive())
+        // checkDeferredDeepLink retries the transient step once more (AND-17), then moves on
+        val result = runBlocking { kotlinx.coroutines.withTimeout(10_000) { DLN.checkDeferredDeepLink() } }
+        verify(exactly = 6) { client.startConnection(any()) }
+        verify(exactly = 6) { client.endConnection() }
+        // the chain moved on to fingerprint matching instead of hanging
+        assertTrue(result.exceptionOrNull()?.toString(), result.isSuccess)
+        assertTrue(recordedRequests().any { it.requestUrl!!.encodedPath == "/api/v1/sdk/match" })
+    }
+
+    @Test
+    fun `AND-32 DLN_awaitReferrer waits for the referrer step and returns the referrer data`() {
+        mockInstallReferrer(referrer = "fp_id=$FP_ID")
+        lookupResponse = { json(referrerLookupSuccess()).setHeadersDelay(200, TimeUnit.MILLISECONDS) }
+        val dln = newDln(context)
+        redirectTo(dln, server)
+        DLNTestSupport.setSingleton(dln)
+        dln.start()
+        val data = runBlocking { DLN.awaitReferrer() }
+        assertNotNull(data)
+        assertEquals(FP_ID, data!!.fpId)
+        assertEquals(DEEPLINK_ID, data.deeplinkData!!.id)
+        assertEquals(1, lookupRequests().size)
+    }
+
+    @Test
+    fun `AND-32 DLN_awaitReferrer returns null before init and for an organic install`() {
+        assertNull(runBlocking { DLN.awaitReferrer() })
+        mockInstallReferrer(referrer = "utm_source=google-play&utm_medium=organic")
+        val dln = runInit()
+        DLNTestSupport.setSingleton(dln)
+        assertNull(runBlocking { DLN.awaitReferrer() })
     }
 
     @Test
