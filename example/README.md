@@ -1,144 +1,46 @@
-# DeepLinkNow Android Example App
+# DeepLinkNow Android example
 
-This example app demonstrates how to use the DeepLinkNow Android SDK with comprehensive deep link handling functionality.
+A single-activity app that shows the whole DeepLinkNow Android integration: `app/src/main/java/com/example/dlnwrapper/MainActivity.kt` (package `com.deeplinknow.example`).
 
-## Features Demonstrated
+1. `DLN.init(context, apiKey)` + `DLN.awaitInitialization()` at startup. The init result is a `Result<DLNAppInfo>`; a failure (`DLNException`, with `code`, `httpStatus`, `serverMessage`) is shown on screen. A real app would usually call `DLN.init` in `Application.onCreate`.
+2. `DLN.checkDeferredDeepLink(minConfidence = …)` once, on first launch. The screen shows `path`, `queryParams`, `fullPath`, `source`, `confidenceScore` and `matchQuality`. Android reads the Play Install Referrer first (exact), then falls back to fingerprint matching.
+3. `DLN.parseDeepLink(url)` for App Links that open the installed app, in `onCreate` and `onNewIntent`.
 
-### 1. SDK Initialization
+For testing, the screen also has a **minConfidence** choice (Off / 30 / 50 / 75), **Check again (force)** and **Reset deferred link** (`DLN.resetDeferredDeepLink()`).
 
-- Initialize the DLN SDK with API key
-- Enable logging for debugging
-- Verify successful initialization
+Replace `API_KEY` in `MainActivity.kt` with your app's key. `test_api_key` is DeepLinkNow's demo key and returns sample data.
 
-### 2. Deep Link Interception
+## Build
 
-- Automatic deep link handling when app is opened
-- Callback-based deep link processing
-- Route and parameter extraction
-- Domain validation
-
-### 3. Manual URL Parsing
-
-- Parse deep link URLs manually
-- Extract paths and query parameters
-- Validate domains
-
-### 4. Test Scenarios
-
-- Test various deep link patterns
-- Simulate different route handlers
-- Error handling for invalid domains
-
-## How to Use
-
-### 1. Initialize the SDK
-
-1. Tap "Init DLN" button to initialize the SDK
-2. Watch the log output for initialization steps
-3. Button will change to "Initialized!" when complete
-
-### 2. Test Deep Link Handling
-
-1. Tap "Test Deep Link Handling" to simulate various deep link scenarios
-2. Watch the log output to see how different URLs are processed
-3. Observe the callback handling for different routes
-
-### 3. Test Manual Parsing
-
-1. Tap "Test Manual URL Parsing" to test URL parsing without triggering callbacks
-2. See how valid and invalid URLs are processed
-3. Examine the extracted paths and parameters
-
-### 4. Test Real Deep Links
-
-1. Set up your Android manifest to handle deep links (see below)
-2. Use ADB to simulate deep link opening:
-   ```bash
-   adb shell am start -W -a android.intent.action.VIEW -d "https://jvgtest123.deeplinknow.com/this_is_a_test_url/anything/else/here?blah=123&test=true&hello=world" com.example.dlnwrapper
-   ```
-3. Watch the app handle the deep link automatically
-
-## Android Manifest Configuration
-
-Make sure your `AndroidManifest.xml` includes:
-
-```xml
-<activity
-    android:name=".MainActivity"
-    android:exported="true">
-    <intent-filter>
-        <action android:name="android.intent.action.MAIN" />
-        <category android:name="android.intent.category.LAUNCHER" />
-    </intent-filter>
-
-    <!-- Handle deep links -->
-    <intent-filter android:autoVerify="true">
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <data
-            android:scheme="https"
-            android:host="jvgtest123.deeplinknow.com" />
-    </intent-filter>
-</activity>
+```bash
+cd packages/dln-android/example
+JAVA_HOME=/opt/homebrew/opt/openjdk@21 ./gradlew assembleDebug    # any JDK 17+
 ```
 
-## Deep Link Examples
+Or open `packages/dln-android/example` in Android Studio.
 
-The app handles these route patterns:
+## App Links
 
-### Test Route
+`app/src/main/AndroidManifest.xml` has an `autoVerify` intent filter for `https://jvgtest123.deeplinknow.com`. Change the host to `{alias}.deeplinknow.com` (and add one `<data android:host="…"/>` per custom domain). In the dashboard, set the package name `com.deeplinknow.example` and your signing certificate's SHA-256 so DeepLinkNow serves a matching `assetlinks.json`.
 
-- **URL**: `https://jvgtest123.deeplinknow.com/this_is_a_test_url/anything/else/here?blah=123&test=true&hello=world`
-- **Route**: `this_is_a_test_url/anything/else/here`
-- **Parameters**: `{blah: "123", test: "true", hello: "world"}`
+Test without a browser:
 
-### Product Detail
+```bash
+adb shell am start -W -a android.intent.action.VIEW \
+  -d "https://jvgtest123.deeplinknow.com/products/123?ref=nl" com.deeplinknow.example
+```
 
-- **URL**: `https://jvgtest123.deeplinknow.com/product/detail?id=12345&category=electronics`
-- **Route**: `product/detail`
-- **Parameters**: `{id: "12345", category: "electronics"}`
+To test the Install Referrer path you need an install from the Play Store (internal testing track). On an emulator or sideloaded build the referrer is empty and the SDK falls back to fingerprinting.
 
-### User Profile
+## Local SDK (default) vs published SDK
 
-- **URL**: `https://jvgtest123.deeplinknow.com/user/profile?user_id=abc123&tab=settings`
-- **Route**: `user/profile`
-- **Parameters**: `{user_id: "abc123", tab: "settings"}`
+`app/build.gradle.kts` depends on `com.deeplinknow:dln-android:1.1.0`. While the SDK is unpublished, `settings.gradle.kts` replaces that dependency with the local source in the parent directory (`packages/dln-android`) through a composite build:
 
-### Promotion Offer
+```kotlin
+// settings.gradle.kts
+val useLocalSdk = true   // SWITCH
+```
 
-- **URL**: `https://jvgtest123.deeplinknow.com/promotion/offer?code=SAVE20&discount=20`
-- **Route**: `promotion/offer`
-- **Parameters**: `{code: "SAVE20", discount: "20"}`
+After `com.deeplinknow:dln-android:1.1.0` is published, set `useLocalSdk = false` to build against the published artifact from Maven Central.
 
-## Log Output
-
-The app provides detailed logging in the UI showing:
-
-- 🚀 Initialization steps
-- 🔗 Deep link processing
-- 📋 URL parsing results
-- ✅ Success indicators
-- ❌ Error messages
-- 📊 Parameter extraction
-
-## Clearing Results
-
-Use the "Clear All Results" button to:
-
-- Clear all displayed results
-- Reset the log output
-- Hide result text views
-- Clear internal data
-
-## Implementation Details
-
-The example implements:
-
-- `DeepLinkCallback` interface for handling deep links
-- Route-based navigation patterns
-- Parameter extraction and validation
-- Comprehensive error handling
-- UI feedback for all operations
-
-See `MainActivity.kt` for the complete implementation.
+The example uses the same Android Gradle Plugin version as the SDK (8.3.2). Gradle doesn't allow two AGP versions in one composite build, so if you upgrade AGP in one, upgrade it in the other.

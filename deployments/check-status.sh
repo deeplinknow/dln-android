@@ -31,12 +31,14 @@ if [ -z "$DEPLOYMENT_ID" ]; then
   error "Could not find deployment ID"
 fi
 
-# Get credentials from gradle.properties
-USERNAME=$(grep "centralPortalTokenUsername=" gradle.properties | cut -d'=' -f2)
-PASSWORD=$(grep "centralPortalTokenPassword=" gradle.properties | cut -d'=' -f2)
+# Credentials live in ~/.gradle/gradle.properties (falls back to the project file)
+GRADLE_PROPS_FILES="$HOME/.gradle/gradle.properties gradle.properties"
+prop() { grep -h "^$1=" $GRADLE_PROPS_FILES 2>/dev/null | head -1 | cut -d'=' -f2-; }
+USERNAME=$(prop centralPortalTokenUsername)
+PASSWORD=$(prop centralPortalTokenPassword)
 
 if [ -z "$USERNAME" ] || [ -z "$PASSWORD" ]; then
-  error "Could not find Central Portal credentials in gradle.properties"
+  error "Could not find Central Portal credentials in ~/.gradle/gradle.properties"
 fi
 
 # Create token

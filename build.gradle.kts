@@ -11,14 +11,14 @@ plugins {
 
 // Set the group ID to match what's expected by the example app
 group = "com.deeplinknow"
-version = "1.0.15"
+version = "1.1.0"
 
 android {
     namespace = "com.deeplinknow"
     compileSdk = 34
 
     defaultConfig {
-        minSdk = 26
+        minSdk = 24
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         consumerProguardFiles("consumer-rules.pro")
@@ -71,8 +71,6 @@ android {
 
 dependencies {
     implementation("androidx.core:core-ktx:1.12.0")
-    implementation(libs.androidx.appcompat)
-    implementation(libs.material)
     implementation(libs.kotlinx.coroutines.android.v173)
     implementation(libs.okhttp.android)
     implementation(libs.gson.v2101)
@@ -88,6 +86,8 @@ dependencies {
     testImplementation(libs.kotlinx.coroutines.test)
     testImplementation("androidx.test:core-ktx:1.5.0")
     testImplementation("org.robolectric:shadows-framework:4.11.1")
+    // MockWebServer for client/server contract tests (matches okhttp 4.12.0 in the version catalog)
+    testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     
     // Instrumentation testing
     androidTestImplementation(libs.androidx.junit)
@@ -102,7 +102,7 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
         create<MavenPublication>("release") {
             groupId = "com.deeplinknow"
             artifactId = "dln-android"
-            version = "1.0.15"
+            version = "1.1.0"
 
             afterEvaluate {
                 from(components["release"])
@@ -183,7 +183,11 @@ tasks.register("verifySigningConfig") {
 tasks.register<Zip>("createCentralPortalBundle") {
     dependsOn("publishReleasePublicationToLocalMavenRepository")
 
-    from("${layout.buildDirectory.get()}/local-maven-repo")
+    // Only this version: the local repo keeps every version ever published locally, and
+    // Central rejects a whole bundle that re-uploads an existing version.
+    from("${layout.buildDirectory.get()}/local-maven-repo") {
+        include("com/deeplinknow/dln-android/${project.version}/**")
+    }
     destinationDirectory.set(layout.buildDirectory.dir("central-portal").get())
     archiveFileName.set("central-portal-bundle.zip")
 

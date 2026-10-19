@@ -1,126 +1,117 @@
 <?xml version="1.0" encoding="utf-8"?>
 <ScrollView xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:app="http://schemas.android.com/apk/res-auto"
-    xmlns:tools="http://schemas.android.com/tools"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
-    android:fillViewport="true"
-    tools:context=".MainActivity">
+    android:fitsSystemWindows="true">
 
     <LinearLayout
         android:layout_width="match_parent"
         android:layout_height="wrap_content"
         android:orientation="vertical"
-        android:padding="20dp"
-        android:paddingTop="60dp">
+        android:padding="16dp">
 
         <TextView
-            android:layout_width="match_parent"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginBottom="20dp"
-            android:text="DeepLinkNow"
-            android:textSize="30sp"
+            android:text="DeepLinkNow example"
+            android:textSize="24sp"
             android:textStyle="bold" />
 
-        <Button
-            android:id="@+id/initDlnButton"
-            android:layout_width="match_parent"
+        <!-- 1. Initialize -->
+        <TextView
+            style="@style/TextAppearance.Material3.TitleMedium"
+            android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_blue_dark"
-            android:text="Auto-Initializing..." />
-
-        <Button
-            android:id="@+id/visitExternalLinkButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_blue_dark"
-            android:text="Visit External Deeplink Page" />
-
-        <Button
-            android:id="@+id/findDeferredUserButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_blue_dark"
-            android:text="Find Deferred User" />
-
-        <Button
-            android:id="@+id/checkClipboardButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_blue_dark"
-            android:text="Check Clipboard" />
-
-        <Button
-            android:id="@+id/testDeepLinkButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_orange_light"
-            android:text="Test Deep Link Handling" />
-
-        <Button
-            android:id="@+id/testManualParsingButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_purple"
-            android:text="Test Manual URL Parsing" />
-
-        <Button
-            android:id="@+id/clearResultsButton"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:backgroundTint="@android:color/holo_red_light"
-            android:text="Clear All Results" />
+            android:layout_marginTop="16dp"
+            android:text="1. Initialize" />
 
         <TextView
-            android:id="@+id/clipboardResultText"
+            android:id="@+id/initStatus"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:visibility="gone" />
+            android:text="Initializing…" />
+
+        <!-- 2. Deferred deep link -->
+        <TextView
+            style="@style/TextAppearance.Material3.TitleMedium"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="2. Deferred deep link (first launch)" />
 
         <TextView
-            android:id="@+id/deepLinkResultText"
+            android:id="@+id/deferredResult"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:background="@android:color/holo_green_light"
-            android:padding="10dp"
-            android:textColor="@android:color/black"
-            android:textStyle="bold"
-            android:visibility="gone" />
-
-        <TextView
-            android:id="@+id/logOutputText"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:background="@android:color/darker_gray"
             android:fontFamily="monospace"
-            android:padding="10dp"
-            android:textColor="@android:color/white"
-            android:textSize="12sp"
-            android:visibility="gone" />
+            android:text="Not checked yet" />
 
         <TextView
-            android:id="@+id/matchesHeaderText"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="minConfidence"
+            android:textStyle="bold" />
+
+        <RadioGroup
+            android:id="@+id/minConfidenceGroup"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:layout_marginTop="20dp"
-            android:text="Match results"
-            android:visibility="gone" />
+            android:checkedButton="@+id/minConfidenceOff"
+            android:orientation="horizontal">
 
-        <LinearLayout
-            android:id="@+id/matchesContainer"
+            <RadioButton
+                android:id="@+id/minConfidenceOff"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="Off" />
+
+            <RadioButton
+                android:id="@+id/minConfidence30"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="30" />
+
+            <RadioButton
+                android:id="@+id/minConfidence50"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="50" />
+
+            <RadioButton
+                android:id="@+id/minConfidence75"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:text="75" />
+        </RadioGroup>
+
+        <Button
+            android:id="@+id/checkAgainButton"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:orientation="vertical" />
+            android:enabled="false"
+            android:text="Check again (force)" />
 
+        <Button
+            android:id="@+id/resetButton"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:enabled="false"
+            android:text="Reset deferred link" />
+
+        <!-- 3. Opened by an App Link -->
+        <TextView
+            style="@style/TextAppearance.Material3.TitleMedium"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="16dp"
+            android:text="3. Opened by an App Link" />
+
+        <TextView
+            android:id="@+id/openedLinkResult"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:fontFamily="monospace"
+            android:text="Open a link on your DeepLinkNow domain to see it here" />
     </LinearLayout>
 </ScrollView>

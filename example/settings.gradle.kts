@@ -38,10 +38,16 @@ dependencyResolutionManagement {
 rootProject.name = "DLNExample"
 include(":app")
 
-// Include the main SDK module
-includeBuild("..") {
-    dependencySubstitution {
-        substitute(module("com.deeplinknow:dln-android")).using(project(":"))
+// Build against the LOCAL SDK source in the parent directory (packages/dln-android): the
+// included build replaces the com.deeplinknow:dln-android dependency in app/build.gradle.kts.
+// SWITCH: set to false after dln-android 1.1.0 is published, to use the Maven artifact instead.
+val useLocalSdk = true
+
+if (useLocalSdk) {
+    includeBuild("..") {
+        dependencySubstitution {
+            substitute(module("com.deeplinknow:dln-android")).using(project(":"))
+        }
     }
 }
 

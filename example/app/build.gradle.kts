@@ -27,11 +27,11 @@ android {
         }
     }
     compileOptions {
-        sourceCompatibility = JavaVersion.VERSION_1_8
-        targetCompatibility = JavaVersion.VERSION_1_8
+        sourceCompatibility = JavaVersion.VERSION_11
+        targetCompatibility = JavaVersion.VERSION_11
     }
     kotlinOptions {
-        jvmTarget = "1.8"
+        jvmTarget = "11"
     }
     buildFeatures {
         viewBinding = true
@@ -51,8 +51,9 @@ dependencies {
     implementation("androidx.navigation:navigation-fragment-ktx:2.7.7")
     implementation("androidx.navigation:navigation-ui-ktx:2.7.7")
     
-    // Use the SDK module with composite build substitution
-    implementation("com.deeplinknow:dln-android:1.0.12")
+    // DeepLinkNow SDK. While `useLocalSdk` is true in settings.gradle.kts, this resolves to the
+    // local source in ../ (composite build); otherwise to the published artifact.
+    implementation("com.deeplinknow:dln-android:1.1.0")
     
     // Test dependencies
     testImplementation("junit:junit:4.13.2")

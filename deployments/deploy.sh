@@ -60,12 +60,13 @@ function check_gpg() {
   fi
   
   # Check if signing properties are in gradle.properties
-  if ! grep -q "signing.keyId=" gradle.properties || \
-     ! grep -q "signing.password=" gradle.properties || \
-     ! grep -q "signing.key=" gradle.properties; then
-    error "Missing signing properties in gradle.properties. Please add signing.keyId, signing.password, and signing.key."
+  GRADLE_PROPS_FILES="$HOME/.gradle/gradle.properties gradle.properties"
+  if ! grep -qh "^signing.keyId=" $GRADLE_PROPS_FILES 2>/dev/null || \
+     ! grep -qh "^signing.password=" $GRADLE_PROPS_FILES 2>/dev/null || \
+     ! grep -qh "^signing.key=" $GRADLE_PROPS_FILES 2>/dev/null; then
+    error "Missing signing properties in ~/.gradle/gradle.properties. Please add signing.keyId, signing.password, and signing.key."
     log "To generate signing.key, run: gpg --export-secret-keys --armor 25EE847B > /tmp/private.key"
-    log "Then copy the contents of /tmp/private.key into your gradle.properties file as signing.key=<paste-key-here>"
+    log "Then copy the contents of /tmp/private.key into ~/.gradle/gradle.properties as signing.key=<paste-key-here>"
     exit 1
   fi
   

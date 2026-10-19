@@ -2,484 +2,229 @@
 
 ## Overview
 
-DeepLinkNow Android SDK provides lightweight deep linking and attribution capabilities for Android applications, with a focus on deferred deep linking functionality. This SDK allows you to track, match, and handle deep links with ease.
+The DeepLinkNow Android SDK (`com.deeplinknow:dln-android`, class `com.deeplinknow.DLN`) does two jobs:
+
+1. **Initialize**: validate your API key and account, and learn your app's link domains.
+2. **Return the deferred deep link**: the path and query the user tapped before installing. It is read from the **Play Install Referrer** (exact), with **fingerprint matching** as a scored backup.
+
+It also parses App Links that open an already-installed app, so deferred and direct opens route the same way. It is not an analytics or attribution SDK.
 
 ## Requirements
 
 - Android API level 24 or higher
-- Kotlin 1.9.0 or higher
-- AndroidX
+- Kotlin 1.9 or higher (Java callers are supported through callback overloads)
 
 ## Installation
 
-### Maven
+```kotlin
+dependencies {
+    implementation("com.deeplinknow:dln-android:1.1.0")
+}
+```
 
 ```xml
 <dependency>
   <groupId>com.deeplinknow</groupId>
   <artifactId>dln-android</artifactId>
-  <version>1.0.15</version>
+  <version>1.1.0</version>
   <type>aar</type>
 </dependency>
 ```
 
-### Gradle
+The library manifest declares `android.permission.INTERNET`. The Install Referrer library adds `BIND_GET_INSTALL_REFERRER_SERVICE`. Consumer R8 rules for the Gson model classes are included.
 
-Add to your app's `build.gradle`:
-
-```gradle
-dependencies {
-    implementation 'com.deeplinknow:dln-android:1.0.15'
-}
-```
-
-Or if using Kotlin DSL (`build.gradle.kts`):
+## Initialization
 
 ```kotlin
-dependencies {
-    implementation("com.deeplinknow:dln-android:1.0.15")
-}
-```
-
-## Getting Started
-
-### Initialize the SDK
-
-First, initialize the SDK in your Application class or main Activity. You'll need an API key from your DeepLinkNow dashboard:
-
-```kotlin
-import com.deeplinknow.DLN
-
 class MyApplication : Application() {
     override fun onCreate() {
         super.onCreate()
-
-        // Basic initialization
         DLN.init(
             context = this,
-            apiKey = "your-api-key-here"
-        )
-
-        // With additional configuration
-        DLN.init(
-            context = this,
-            apiKey = "your-api-key-here",
-            enableLogs = BuildConfig.DEBUG,  // Enable logs in debug builds
-            overrideScreenWidth = null,      // Optional - for testing
-            overrideScreenHeight = null,     // Optional - for testing
-            overridePixelRatio = null        // Optional - for testing
+            apiKey = "your-public-api-key",
+            enableLogs = BuildConfig.DEBUG,   // debug logs under tag "DLN"; the key is never logged
+            // optional:
+            baseUrl = "https://deeplinknow.com",
+            timeoutMs = 10_000,               // per request
+            retryAttempts = 2,                // transient failures: network, timeout, 5xx, 429
+            overrideScreenWidth = null,       // emulator testing only (dp)
+            overrideScreenHeight = null,
+            overridePixelRatio = null,
+            onComplete = { result -> /* Result<DLNAppInfo>, main thread */ },
         )
     }
 }
 ```
 
-The SDK will automatically initialize and fetch your app's custom domains during this process.
+- `DLN.init` returns immediately. It stores only the application context and keeps a process-wide singleton.
+- It calls `POST /api/v1/sdk/init` once and starts reading the Install Referrer.
+- Calling it again with the same key reuses the running or completed init. A different key replaces the previous state.
+- You can observe the outcome three ways:
+  - the `onComplete` callback
+  - `DLN.awaitInitialization()` (suspend, returns `Result<DLNAppInfo>`)
+  - `DLN.isInitialized`
+- `DLNAppInfo` has `appId`, `alias`, `name`, `linkDomains` (`<alias>.deeplinknow.com` plus verified custom domains), `accountStatus` and `creditsRemaining`.
+- A non-https `baseUrl` is refused, except `localhost`, `127.0.0.1` and `10.0.2.2` for development.
 
-## Core Features
-
-### Finding Deferred Users
-
-The primary feature of DeepLinkNow is identifying users who have clicked on a deep link before installing your app. This is typically called in your app's first activity:
+## The deferred deep link: `checkDeferredDeepLink`
 
 ```kotlin
-// Using Kotlin Coroutines
 lifecycleScope.launch {
-    val response = DLN.getInstance().findDeferredUser()
-
-    response?.matches?.forEach { match ->
-        // Access match properties
-        val confidenceScore = match.confidenceScore
-        val deeplink = match.deeplink
-        val matchDetails = match.matchDetails
-
-        // Process the match information
-        // ...
-    }
-}
-```
-
-### Understanding Match Results
-
-The SDK returns up to 5 potential matches, ranked by confidence score. Each match contains:
-
-1. **Deeplink**: Contains the target URL, metadata, campaign ID, and timestamp information
-2. **Confidence Score**: A percentage indicating how confident the match is
-3. **Match Details**: Shows which parameters matched between the fingerprints:
-   - IP Match: Whether the IP address matched
-   - Device Match: OS version, device model, hardware fingerprint
-   - Time Proximity: How close in time the click and app open were
-   - Locale Match: Language and timezone match
-
-Example of processing the match details:
-
-```kotlin
-match.deeplink?.let { deeplink ->
-    // Access deep link information
-    val targetUrl = deeplink.targetUrl
-    val metadata = deeplink.metadata
-    val campaignId = deeplink.campaignId
-    val matchedAt = deeplink.matchedAt
-    val expiresAt = deeplink.expiresAt
-
-    // Take action based on the deeplink
-    navigateToContent(targetUrl)
-}
-
-match.matchDetails?.let { details ->
-    // Examine confidence factors
-    val ipMatched = details.ipMatch.matched
-    val ipScore = details.ipMatch.score
-
-    val deviceMatched = details.deviceMatch.matched
-    val deviceScore = details.deviceMatch.score
-
-    val localeMatched = details.localeMatch.matched
-    val localeScore = details.localeMatch.score
-
-    val timeDifference = details.timeProximity.timeDifferenceMinutes
-    val timeScore = details.timeProximity.score
-
-    // You can use these details to determine your confidence threshold
-    if (match.confidenceScore > 0.7) {
-        // High confidence match
-    } else if (match.confidenceScore > 0.4) {
-        // Medium confidence match
-    } else {
-        // Low confidence match
-    }
-}
-```
-
-### Checking Clipboard for Deep Links
-
-If you don't find a fingerprinted user through the `findDeferredUser()` method, you can check the clipboard for a copied deep link. Note that you should request clipboard permission from the user before doing this:
-
-```kotlin
-// Make sure to request proper clipboard permissions in your app
-val clipboardContent = DLN.getInstance().checkClipboard()
-clipboardContent?.let { deepLinkUrl ->
-    // Process the deep link found in the clipboard
-    val (path, params) = DLN.getInstance().parseDeepLink(deepLinkUrl) ?: return
-
-    // Use the path and parameters to route the user
-    navigateToDestination(path, params)
-}
-```
-
-### Parsing Deep Links
-
-The SDK provides tools to parse and validate deep links:
-
-```kotlin
-val url = "https://deeplinknow.com/your-path?param1=value1&param2=value2"
-val result = DLN.getInstance().parseDeepLink(url)
-
-result?.let { (path, parameters) ->
-    // Process the path and parameters
-    println("Path: $path")
-    println("Parameters: $parameters")
-
-    // Use the parameters to customize the user experience
-    parameters["campaign"]?.let { campaignId ->
-        // Track the campaign
-    }
-
-    parameters["referrer"]?.let { referrer ->
-        // Track the referrer
-    }
-}
-```
-
-### Deep Link Interception
-
-The SDK provides automatic deep link interception for when your app is opened via a deep link. This feature automatically captures and processes deep links from deeplinknow.com domains or your custom domains.
-
-#### Setting Up Deep Link Callback
-
-First, implement the `DeepLinkCallback` interface:
-
-```kotlin
-import com.deeplinknow.DeepLinkCallback
-import com.deeplinknow.DeepLinkData
-
-class MainActivity : AppCompatActivity(), DeepLinkCallback {
-
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        // Register the deep link callback
-        DLN.setDeepLinkCallback(this)
-
-        // Handle deep link if app was opened from one
-        handleIncomingDeepLink(intent)
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        handleIncomingDeepLink(intent)
-    }
-
-    private fun handleIncomingDeepLink(intent: Intent?) {
-        intent?.data?.let { uri ->
-            val url = uri.toString()
-
-            // Use DLN SDK to handle the deep link
-            DLN.handleDeepLink(url)
+    val result = DLN.checkDeferredDeepLink(minConfidence = null, force = false)
+    result.onSuccess { link ->
+        if (link != null) {
+            // link.path = "/products/123", link.queryParams["ref"] = QueryValue.Single("newsletter")
+            navigate(link.path, link.queryParams)
         }
-    }
-
-    // Deep link callback implementation
-    override fun onDeepLinkOpen(deepLinkData: DeepLinkData) {
-        val route = deepLinkData.route
-        val params = deepLinkData.params
-
-        // Handle the deep link based on route and params
-        when (route) {
-            "product/detail" -> {
-                val productId = params["id"]
-                // Navigate to product detail
-            }
-            "user/profile" -> {
-                val userId = params["user_id"]
-                // Navigate to user profile
-            }
-            else -> {
-                // Handle other routes
-            }
-        }
+    }.onFailure { e ->
+        val error = e as DLNException // e.code: NETWORK, INVALID_API_KEY, NOT_INITIALIZED, …
     }
 }
 ```
 
-#### Deep Link Data Structure
+The chain:
 
-The `DeepLinkData` object contains:
+1. It waits for init. If init failed, it returns `NOT_INITIALIZED`, with the init error as the `cause`.
+2. **Play Install Referrer.** The landing page puts `fp_id=<uuid>` (or `deeplink_id=<uuid>`) in the Play Store `referrer`. The SDK URL-decodes the referrer and reads those exact keys. It accepts only UUID values, and `fp_id` wins when both are present. It then calls `GET /api/v1/sdk/referrer-lookup`.
+   - A hit returns `source = REFERRER`, `confidenceScore = 100` and `matchQuality = HIGH`.
+   - If the referrer service is unavailable, it retries up to 3 connections with backoff.
+3. **Fingerprint.** If the referrer step gives no link, it calls `POST /api/v1/sdk/match`. It takes the first candidate, in server order, that has a deep link and passes `minConfidence` when you set one.
+   - The result keeps the server's `confidenceScore`, `matchQuality` (HIGH ≥ 75, MEDIUM ≥ 50, LOW otherwise) and `matchDetails`.
+4. **Once per install.** After a link is returned, or every step definitively found nothing, a flag is stored and later calls resolve to `null` with no network access. `force = true` ignores the flag.
+   - Errors never set the flag: network, timeouts, 401/403/429/5xx and malformed responses. The next call or launch retries.
+   - The Android chain never reads the clipboard.
 
-- `route`: The path portion of the URL (without leading slash)
-- `params`: A map of query parameters (all values are strings)
+Concurrent calls share one run. From Java, use the callback overload:
 
-For example, the URL `https://jvgtest123.deeplinknow.com/this_is_a_test_url/anything/else/here?blah=123&test=true&hello=world` would produce:
-
-```kotlin
-DeepLinkData(
-    route = "this_is_a_test_url/anything/else/here",
-    params = mapOf(
-        "blah" to "123",
-        "test" to "true",
-        "hello" to "world"
-    )
-)
+```java
+DLN.checkDeferredDeepLink(null, false, new DeferredDeepLinkCallback() {
+    @Override public void onResult(DeferredDeepLink link, DLNException error) { /* main thread */ }
+});
 ```
 
-#### Manual Deep Link Handling
+`DLN.resetDeferredDeepLink()` clears the first-launch flag and the cached referrer result, in memory and on disk. Use it for testing.
 
-You can also manually handle deep links:
+### `DeferredDeepLink`
 
-```kotlin
-val url = "https://yourdomain.deeplinknow.com/path/to/content?param1=value1"
-val handled = DLN.handleDeepLink(url)
+| Field | Type | Meaning |
+|---|---|---|
+| `path` | `String` | `fullPath` up to the first `?`, not decoded, starts with `/` |
+| `queryParams` | `Map<String, QueryValue>` | URLSearchParams semantics: `Single`, `Flag` (empty value), `Multiple` (repeated key). `QueryValue.toPlain()` gives `String`, `true` or `List<String>` |
+| `fullPath` | `String` | Path and query as tapped (server `full_path`) |
+| `url` | `String` | `target_url` if it is an absolute URL on your link domain, else `https://<primary domain><fullPath>` |
+| `source` | `DeferredDeepLinkSource` | `REFERRER` or `FINGERPRINT` (`.value` gives `"referrer"` / `"fingerprint"`) |
+| `confidenceScore` | `Double` | 0–100 |
+| `matchQuality` | `MatchQuality` | `HIGH`, `MEDIUM` or `LOW` |
+| `deeplinkId`, `targetUrl`, `campaignId`, `metadata`, `matchedAt`, `expiresAt` | | From the server |
+| `matchDetails` | `MatchDetails?` | Fingerprint only |
 
-if (handled) {
-    // Deep link was valid and processed
-    // Your callback will be triggered
-} else {
-    // Deep link was not from a valid domain
-}
-```
+DLN does not choose a threshold for you. Fingerprints are best effort: iOS hides real IPs and many devices share Wi-Fi. Use `minConfidence`, or inspect `matchQuality`, if a wrong guess is costly for your app.
 
-#### Android Manifest Configuration
+## Errors
 
-Make sure your Activity is configured to handle deep links in your `AndroidManifest.xml`:
+`DLNException(code, httpStatus, serverMessage)`. The `code` values, with the `.value` wire name shared with iOS and React Native:
+
+| Code | When |
+|---|---|
+| `NOT_INITIALIZED` (`notInitialized`) | `DLN.init` not called, or init failed (`cause` = init error) |
+| `INVALID_API_KEY` (`invalidApiKey`) | 401 |
+| `ACCOUNT_INACTIVE` (`accountInactive`) | 403 "Account is not active" |
+| `NO_CREDITS` (`noCredits`) | 403 "No credits remaining" |
+| `RATE_LIMITED` (`rateLimited`) | 429 |
+| `BAD_REQUEST` (`badRequest`) | 400, other 4xx, invalid `baseUrl` |
+| `SERVER` (`server`) | 5xx |
+| `NETWORK` (`network`) | Transport error, timeout, offline |
+| `INVALID_RESPONSE` (`invalidResponse`) | Unparseable or unexpected body (e.g. a captive portal page) |
+
+The SDK runs its background work in its own coroutine scope and never throws into your app.
+
+## Lower-level APIs
+
+| API | Notes |
+|---|---|
+| `DLN.findDeferredUserResult()` / `getInstance().findDeferredUserResult()` | `Result<MatchResponse>`: all fingerprint candidates, unfiltered, in server order. Each `Match` has `confidenceScore`, `matchQuality`, `matchDetails` and `deeplink` (`queryParams`, `fullPath`, `typedQueryParams`) |
+| `getInstance().findDeferredUser()` | 1.0 API: `MatchResponse?` (null on any error) |
+| `getInstance().getDeferredDeepLink()` | 1.0 API: the cached referrer `DeeplinkMatch?`, returned on every launch |
+| `getInstance().getReferrerData()` | The raw referrer result (`referrerString`, `fpId`, `deeplinkId`, `deeplinkData`, `processedAt`) |
+| `getInstance().checkClipboard()` | Returns the clipboard text only if, trimmed, it is exactly one http(s) URL on your link domains. Returns null without focus (Android 10+). On Android 12+ reading shows a system "pasted" toast, so call it only when you need it |
+| `getInstance().hasDeepLinkToken()` | Checks the clip description only (no toast). True means it is worth calling `checkClipboard()` |
+| `DLN.parseDeepLink(url)` | `ParsedDeepLink(path, queryParams, fullPath, url)` or null |
+| `DLN.isValidDomain(host)` | The host rule below |
+| `getInstance().parseDeepLink(url)` | Deprecated 1.0 API: `Pair<String, Map<String, String>>` (decoded path, first value of repeated keys) |
+
+## Direct opens (App Links)
 
 ```xml
-<activity
-    android:name=".MainActivity"
-    android:exported="true">
-    <intent-filter>
-        <action android:name="android.intent.action.MAIN" />
-        <category android:name="android.intent.category.LAUNCHER" />
-    </intent-filter>
-
-    <!-- Handle deep links -->
+<activity android:name=".MainActivity" android:exported="true">
     <intent-filter android:autoVerify="true">
         <action android:name="android.intent.action.VIEW" />
         <category android:name="android.intent.category.DEFAULT" />
         <category android:name="android.intent.category.BROWSABLE" />
-        <data
-            android:scheme="https"
-            android:host="yourdomain.deeplinknow.com" />
+        <data android:scheme="https" android:host="myapp.deeplinknow.com" />
+        <!-- repeat <data android:host="go.myapp.com" /> for a verified custom domain -->
     </intent-filter>
 </activity>
 ```
 
-Replace `yourdomain.deeplinknow.com` with your actual deep link domain.
-
-#### Domain Validation
-
-The SDK automatically validates deep link domains using the following rules:
-
-1. **DeepLinkNow domains**: Any subdomain of `deeplinknow.com` (e.g., `yourapp.deeplinknow.com`, `test123.deeplinknow.com`)
-2. **Alternative domains**: Any subdomain of `deeplink.now`
-3. **Custom domains**: Domains configured in your DeepLinkNow dashboard and returned in the init response
-
-Examples of valid domains:
-
-- `https://yourapp.deeplinknow.com/path`
-- `https://deeplinknow.com/path`
-- `https://custom.deeplink.now/path`
-- Custom domains configured in your account
-
-Invalid domains will be rejected and won't trigger the deep link callback.
-
-## Integration Examples
-
-### Typical App Flow
-
-Here's a typical flow for integrating DeepLinkNow in your application:
-
 ```kotlin
-class MainActivity : AppCompatActivity() {
-    override fun onCreate(savedInstanceState: Bundle?) {
-        super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-
-        // Check for deferred deep links
-        checkForDeferredLinks()
-    }
-
-    private fun checkForDeferredLinks() {
-        lifecycleScope.launch {
-            // Try to find a deferred user first
-            val response = DLN.getInstance().findDeferredUser()
-            var foundDeepLink = false
-
-            // Process any matches
-            response?.matches?.firstOrNull { match ->
-                match.confidenceScore > 0.5 && match.deeplink != null
-            }?.let { highConfidenceMatch ->
-                highConfidenceMatch.deeplink?.let { deeplink ->
-                    handleDeepLink(deeplink.targetUrl)
-                    foundDeepLink = true
-                }
-            }
-
-            // If no deferred user was found, check the clipboard (with permission)
-            if (!foundDeepLink) {
-                DLN.getInstance().checkClipboard()?.let { clipboardUrl ->
-                    handleDeepLink(clipboardUrl)
-                }
-            }
-        }
-    }
-
-    private fun handleDeepLink(url: String) {
-        DLN.getInstance().parseDeepLink(url)?.let { (path, params) ->
-            when (path) {
-                "/products" -> {
-                    val productId = params["id"]
-                    navigateToProduct(productId)
-                }
-                "/categories" -> {
-                    val categoryId = params["id"]
-                    navigateToCategory(categoryId)
-                }
-                "/promo" -> {
-                    val promoCode = params["code"]
-                    applyPromoCode(promoCode)
-                }
-                // Handle other paths
-            }
-        }
-    }
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    handle(intent)
 }
-```
 
-### Handling Direct Deep Links
-
-For handling direct deep links (when the app is opened from a link), configure your `AndroidManifest.xml`:
-
-```xml
-<activity android:name=".MainActivity">
-    <intent-filter android:autoVerify="true">
-        <action android:name="android.intent.action.VIEW" />
-        <category android:name="android.intent.category.DEFAULT" />
-        <category android:name="android.intent.category.BROWSABLE" />
-        <data android:scheme="https" />
-        <data android:host="yourdomain.deeplinknow.com" />
-    </intent-filter>
-</activity>
-```
-
-Then handle the incoming intent:
-
-```kotlin
 override fun onNewIntent(intent: Intent) {
     super.onNewIntent(intent)
-    handleIncomingIntent(intent)
+    handle(intent)
 }
 
-private fun handleIncomingIntent(intent: Intent) {
-    if (intent.action == Intent.ACTION_VIEW) {
-        intent.data?.toString()?.let { url ->
-            handleDeepLink(url)
-        }
-    }
+private fun handle(intent: Intent?) {
+    val url = intent?.data?.toString() ?: return
+    DLN.parseDeepLink(url)?.let { navigate(it.path, it.queryParams) }
 }
 ```
 
-## Advanced Configuration
+Alternatively, register a `DeepLinkCallback` with `DLN.setDeepLinkCallback(...)` and call `DLN.handleDeepLink(url)`. `DeepLinkData` contains:
 
-### Debug Logging
+- `route`: the path without its leading `/`, decoded (1.0 behaviour)
+- `params`: a single-valued map
+- `path`: undecoded, with the leading `/`
+- `queryParams`: typed values
 
-Enable logs to help with debugging:
+A callback that throws does not crash the SDK.
+
+### Host rule
+
+- Hosts are lowercased, and a trailing `.` and any port are dropped.
+- After a successful init, only `<alias>.deeplinknow.com` and your **verified** custom domains are accepted.
+- Before init, any non-reserved `<alias>.deeplinknow.com` is accepted provisionally, and custom domains are rejected.
+- These are always rejected:
+  - the apex `deeplinknow.com`
+  - reserved subdomains (`www`, `app`, `api`, `docs`, `m`, `mail`)
+  - any `*.deeplink.now` host
+  - other schemes
+  - lookalikes such as `deeplinknow.com.evil.com` or `https://a.deeplinknow.com@evil.com/`
+
+## Privacy
+
+| Data | Purpose |
+|---|---|
+| Synthetic UA, OS version, `Build.MODEL`, language, time zone, screen size (dp) and density | Fingerprint matching against the click |
+| `ANDROID_ID` (`device_id`) | Sent on `/match` to claim a click for this install and keep repeat calls idempotent. Also sent on `/init` so monthly active users are counted per device, not per IP; the server stores only a hash. It is app-signing-key scoped |
+| Install Referrer string | Exact deferred link |
+
+- `advertising_id` and `vendor_id` are always JSON `null`.
+- The SDK does not read the Google Advertising ID, location, contacts, carrier or the installed-apps list.
+- The server derives the IP from the connection.
+- On device the SDK stores only the first-launch flag and the definitive referrer result. They live in `noBackupFilesDir`, so they are excluded from Auto Backup and device transfer.
+- 1.0's `SharedPreferences("dln_referrer")` is migrated once and deleted.
+
+## Emulator testing
 
 ```kotlin
-DLN.init(
-    context = applicationContext,
-    apiKey = "your-api-key",
-    enableLogs = true  // Enable debug logs
-)
+DLN.init(applicationContext, "your-api-key", enableLogs = true,
+    overrideScreenWidth = 393, overrideScreenHeight = 852, overridePixelRatio = 2.75f)
 ```
-
-### Testing with Emulators
-
-For testing in emulators, you can override screen dimensions and pixel ratio:
-
-```kotlin
-DLN.init(
-    context = applicationContext,
-    apiKey = "your-api-key",
-    enableLogs = true,
-    overrideScreenWidth = 360,  // Standard phone width
-    overrideScreenHeight = 800, // Standard phone height
-    overridePixelRatio = 2.0f   // Standard pixel density
-)
-```
-
-## Domain Validation
-
-The SDK automatically validates deep links against:
-
-- deeplinknow.com
-- deeplink.now
-- Your app's verified custom domains (configured in the dashboard)
-
-These domains are loaded during SDK initialization.
-
-## Best Practices
-
-1. **Call `findDeferredUser()` Early**: Make this call as early as possible in your app lifecycle, typically in the first activity.
-
-2. **Handle Multiple Confidence Levels**: Consider different actions based on the confidence score of matches.
-
-3. **Respect User Privacy**: Always request permission before accessing clipboard data.
-
-4. **Error Handling**: Add proper error handling for network requests and parsing.
-
-5. **Testing**: Test your implementation with both real devices and emulators to ensure it works correctly.
 
 ## Support
 
 - Email: support@deeplinknow.com
-- Documentation: [docs.deeplinknow.com](https://docs.deeplinknow.com)

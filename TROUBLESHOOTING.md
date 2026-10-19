@@ -39,14 +39,7 @@ keytool -list -v -keystore ~/.android/debug.keystore -alias androiddebugkey
 keytool -list -v -keystore your-release.keystore -alias your-alias
 ```
 
-#### Use our helper script:
-
-```bash
-chmod +x verify-fingerprints.sh
-./verify-fingerprints.sh your-app.apk
-# or
-./verify-fingerprints.sh ~/.android/debug.keystore androiddebugkey
-```
+**Play App Signing:** If Google Play signs your app, the installed app is signed with Google's app signing key, not your upload key. Copy the SHA-256 from Play Console → Setup → App integrity and add it to your app's certificates in the DeepLinkNow dashboard.
 
 ### 2. Check `assetlinks.json` Format
 
@@ -232,3 +225,46 @@ If you're still having trouble, please provide:
 - Your `AndroidManifest.xml` intent filter
 - The output of `keytool -printcert -jarfile your-app.apk`
 - Whether you're testing on a real device or emulator
+
+---
+
+# Deferred deep link troubleshooting (SDK 1.1)
+
+### `checkDeferredDeepLink()` returns `null`
+
+- **It already ran on this install.** A link is delivered once per install. Later calls return `null` without any network access. Use `DLN.resetDeferredDeepLink()` or `force = true` while testing, or uninstall and reinstall. The SDK state is excluded from Auto Backup, so a reinstall starts fresh.
+- **The install was not from the Play Store** (sideloaded or `adb install`). There is no Install Referrer, so only fingerprint matching runs. Fingerprints are matched for one hour after the click.
+- **Organic referrer.** `utm_source=google-play&utm_medium=organic` means the user did not come through a DLN link page.
+- **`minConfidence` is too high.** It filters fingerprint candidates only. Leave it unset to accept every candidate the server returns.
+
+### `checkDeferredDeepLink()` fails
+
+| `DLNException.code` | Fix |
+|---|---|
+| `NOT_INITIALIZED` | Call `DLN.init` first. If `cause` is set, init itself failed (see below) |
+| `INVALID_API_KEY` | Use the app's **public** key from the dashboard |
+| `ACCOUNT_INACTIVE` / `NO_CREDITS` | Check your subscription in the dashboard |
+| `NETWORK` / `SERVER` / `RATE_LIMITED` | Transient. The first-launch flag is not set, so the next call or launch retries |
+| `INVALID_RESPONSE` | Usually a captive portal or proxy page. Transient |
+
+### Seeing what happened
+
+Initialize with `enableLogs = true` and filter logcat by tag `DLN`:
+
+```bash
+adb logcat -s DLN
+```
+
+Each step logs its outcome:
+
+- init and link domains
+- the referrer (found / none / error)
+- the fingerprint candidates, with the best confidence
+
+### Testing the Install Referrer locally
+
+The Play Install Referrer only reflects real Play Store installs. To test the referrer path, publish to an internal testing track and install from a DLN link on a real device. For local runs, the fingerprint fallback is what gets exercised.
+
+### Link host rejected by `parseDeepLink`
+
+After init, only `<alias>.deeplinknow.com` and **verified** custom domains are accepted. These are always rejected: `deeplinknow.com` itself, other apps' subdomains and `*.deeplink.now` (not a DLN domain). Check the custom domain's status in the dashboard.
