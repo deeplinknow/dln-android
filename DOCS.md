@@ -18,7 +18,7 @@ It also parses App Links that open an already-installed app, so deferred and dir
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.2.0")
+    implementation("com.deeplinknow:dln-android:1.3.0")
 }
 ```
 
@@ -26,7 +26,7 @@ dependencies {
 <dependency>
   <groupId>com.deeplinknow</groupId>
   <artifactId>dln-android</artifactId>
-  <version>1.2.0</version>
+  <version>1.3.0</version>
   <type>aar</type>
 </dependency>
 ```

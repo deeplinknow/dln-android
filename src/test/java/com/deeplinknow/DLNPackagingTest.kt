@@ -51,8 +51,8 @@ class DLNPackagingTest {
     }
 
     @Test
-    fun `AND-01 the version was bumped as a minor (1_2_x, in step with iOS and React Native) for the additive API`() {
-        assertTrue(version(), version().startsWith("1.2."))
+    fun `AND-01 the version was bumped as a minor (1_3_x, in step with iOS and React Native) for the additive API`() {
+        assertTrue(version(), version().startsWith("1.3."))
     }
 
     @Test

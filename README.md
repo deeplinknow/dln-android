@@ -8,13 +8,13 @@ DeepLinkNow is not an analytics or attribution SDK. It never reads the advertisi
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.2.0")
+    implementation("com.deeplinknow:dln-android:1.3.0")
 }
 ```
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:dln-android:1.2.0'
+    implementation 'com.deeplinknow:dln-android:1.3.0'
 }
 ```
 
