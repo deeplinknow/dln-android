@@ -110,8 +110,8 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
 
             pom {
                 name.set("DeepLinkNow Android SDK")
-                description.set("Android SDK for DeepLinkNow service")
-                url.set("https://github.com/jvgeee/dln-android")
+                description.set("DeepLinkNow Android SDK: deferred deep links and App Links for Kotlin apps. Returns the link a user tapped before installing, via the Play Install Referrer. No attribution, no advertising IDs.")
+                url.set("https://github.com/deeplinknow/dln-android")
 
                 licenses {
                     license {
@@ -129,9 +129,9 @@ val publishingConfig = extensions.getByType<PublishingExtension>().apply {
                 }
 
                 scm {
-                    connection.set("scm:git:https://github.com/jvgeee/dln-android.git")
-                    developerConnection.set("scm:git:ssh://https://github.com/jvgeee/dln-android.git")
-                    url.set("https://github.com/jvgeee/dln-android")
+                    connection.set("scm:git:https://github.com/deeplinknow/dln-android.git")
+                    developerConnection.set("scm:git:ssh://git@github.com/deeplinknow/dln-android.git")
+                    url.set("https://github.com/deeplinknow/dln-android")
                 }
             }
         }
