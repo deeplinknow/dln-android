@@ -1550,7 +1550,7 @@ class DLN internal constructor(
 
     companion object {
         /** SDK version, kept in sync with build.gradle.kts (AND-01). */
-        const val SDK_VERSION = "1.3.0"
+        const val SDK_VERSION = "1.4.0"
 
         private const val TAG = "DLN"
         private const val INIT_CACHE_FILE = "com.deeplinknow.initcache.json"

@@ -8,13 +8,13 @@ DeepLinkNow is not an analytics or attribution SDK. It never reads the advertisi
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.3.0")
+    implementation("com.deeplinknow:dln-android:1.4.0")
 }
 ```
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:dln-android:1.3.0'
+    implementation 'com.deeplinknow:dln-android:1.4.0'
 }
 ```
 
@@ -73,7 +73,7 @@ The result (`DeferredDeepLink`):
 
 From Java, use the callback overload `DLN.checkDeferredDeepLink(null, false, callback)` with a `DeferredDeepLinkCallback`.
 
-## One handler for every open (1.4.0, unreleased)
+## One handler for every open (1.4.0)
 
 From 1.4.0 your app can route every link from one place. The handler gets the same `DLNLink` whether the link came through an install (deferred) or opened the installed app (an App Link or your custom scheme):
 

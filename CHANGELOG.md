@@ -2,7 +2,7 @@
 
 All notable changes to the DeepLinkNow Android SDK (`com.deeplinknow:dln-android`). iOS, Android and React Native share one major.minor version (SDK-84).
 
-## Unreleased (1.4.0)
+## 1.4.0
 
 One link object for every open (SDK-86 to SDK-91, AND-35 to AND-40). Additive: every 1.3.0 call compiles and behaves as before.
 
