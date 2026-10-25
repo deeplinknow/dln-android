@@ -86,6 +86,12 @@ internal object DLNJson {
         )
     }
 
+    /** `GET /api/v1/sdk/resolve` 200 body: `{"deeplink": {…}}` (API-SDK-71..75, SDK-90). */
+    fun decodeResolve(element: JsonElement): DeeplinkMatch {
+        val o = element.obj() ?: throw Invalid("resolve response is not an object")
+        return decodeDeeplink(o.child("deeplink")) ?: throw Invalid("resolve response has no deeplink")
+    }
+
     private fun decodeDetails(element: JsonElement?): MatchDetails {
         val o = element.obj() ?: JsonObject()
         val ip = o.child("ip_match").obj() ?: JsonObject()

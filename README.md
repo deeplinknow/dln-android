@@ -73,6 +73,42 @@ The result (`DeferredDeepLink`):
 
 From Java, use the callback overload `DLN.checkDeferredDeepLink(null, false, callback)` with a `DeferredDeepLinkCallback`.
 
+## One handler for every open (1.4.0, unreleased)
+
+From 1.4.0 your app can route every link from one place. The handler gets the same `DLNLink` whether the link came through an install (deferred) or opened the installed app (an App Link or your custom scheme):
+
+```kotlin
+// Application.onCreate, after DLN.init
+DLN.onLink { link ->
+    // link.type: DEFERRED or DIRECT
+    // link.source: REFERRER, FINGERPRINT, APP_LINK or SCHEME
+    route(link.path, link.queryParams)
+}
+
+// The activity with your App Link intent filter
+override fun onCreate(savedInstanceState: Bundle?) {
+    super.onCreate(savedInstanceState)
+    DLN.handleIntent(intent)
+}
+
+override fun onNewIntent(intent: Intent) {
+    super.onNewIntent(intent)
+    DLN.handleIntent(intent)
+}
+```
+
+- Registering the handler runs the deferred check once per process, like `checkDeferredDeepLink()`. Links that arrive before a handler exists are passed to it when it registers.
+- `handleIntent` returns `true` for a link on your app's domains or your custom scheme, `false` for anything else. The same intent is only delivered once, even when `onCreate` and `onNewIntent` both see it, or the user reopens the app from Recents.
+- The handler runs on the main thread. `DLNLink` has every `DeferredDeepLink` field plus `type`. For a direct open, `confidenceScore` is 100 and `matchQuality` is `HIGH`.
+- **Custom scheme**: `myapp://products/123?x=1` arrives as path `/products/123`. A scheme counts as yours when your manifest has a VIEW intent filter for it, or pass `DLNLinkOptions(schemes = setOf("myapp"))`.
+- **Wait for sign-in**: `DLN.onLink(DLNLinkOptions(hold = true)) { … }` keeps the latest deferred and the latest direct link in `DLN.pendingLinks` (deferred first; `DLN.pendingLink` is the first). After sign-in, call `DLN.releasePendingLink()`: it delivers the held links (deferred first) and ends the hold, so later links go straight to your handler. `DLN.clearPendingLink()` drops them and keeps holding. Registering again with `hold = false` also delivers them and stops holding.
+- **Imported short links**: `DLNLinkOptions(resolve = true)` looks up each App Link with `GET /api/v1/sdk/resolve` and fills `deeplinkId`, `targetUrl`, `campaignId` and `metadata` before delivering it. A 404, an error or a timeout delivers the link unresolved. `DLN.resolveLink(url)` (suspend) does the same lookup on demand.
+- `onLink` returns a `DLNLinkSubscription`; call `remove()` if you register from an activity.
+
+From Java: `DLN.onLink(link -> route(link))`, `DLN.onLink(new DLNLinkOptions(null, false, true), handler)` and `DLN.resolveLink(url, link -> { … })`.
+
+`checkDeferredDeepLink`, `parseDeepLink`, `setDeepLinkCallback` and `handleDeepLink` keep working as before. `handleDeepLink(url)` still calls the `DeepLinkCallback` only; `handleIntent` feeds the `onLink` handler.
+
 ## App Links (installed app)
 
 Add an `autoVerify` intent filter for `https://<alias>.deeplinknow.com` (and your verified custom domain), then:

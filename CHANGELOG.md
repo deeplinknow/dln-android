@@ -2,6 +2,18 @@
 
 All notable changes to the DeepLinkNow Android SDK (`com.deeplinknow:dln-android`). iOS, Android and React Native share one major.minor version (SDK-84).
 
+## Unreleased (1.4.0)
+
+One link object for every open (SDK-86 to SDK-91, AND-35 to AND-40). Additive: every 1.3.0 call compiles and behaves as before.
+
+- **`DLNLink`**: every `DeferredDeepLink` field plus `type` (`DLNLinkType.DEFERRED` / `DIRECT`). `source` is a `DLNLinkSource`: the deferred `REFERRER`, `CLIPBOARD`, `FINGERPRINT`, plus `APP_LINK` (https on the app's domains) and `SCHEME` (the app's custom scheme). `DeferredDeepLink.source` keeps its three values.
+- **`DLN.onLink(options) { link -> }`** (and a Java `DLNLinkHandler` overload): one handler for deferred and direct opens, on the main thread. Registering it runs the deferred check once per process; links that arrived before a handler are replayed to it once (deferred first). Returns a `DLNLinkSubscription`. The handler carries over when `DLN.init` replaces the instance.
+- **`DLN.handleIntent(intent): Boolean`** from `onCreate` and `onNewIntent`. The same intent (or the same URL within 3 seconds) is delivered once, and an intent relaunched from Recents isn't delivered again. A custom scheme counts as the app's when the manifest declares it, or when it's in `DLNLinkOptions.schemes`.
+- **Hold**: `DLNLinkOptions(hold = true)`, `DLN.pendingLinks` (the latest deferred and the latest direct link, deferred first), `DLN.pendingLink` (the first of them), `DLN.releasePendingLink()` (delivers them and ends the hold), `DLN.clearPendingLink()` (drops them, keeps holding).
+- **Resolve**: `DLNLinkOptions(resolve = true)` and `DLN.resolveLink(url)` call `GET /api/v1/sdk/resolve` for App Links (one attempt, within the configured timeout; a 404 or error delivers the link unresolved).
+- **Parsing** strips a `dln` fragment parameter (`#dln=<click id>`) from `url` (SDK-92). `fullPath`, `path` and `queryParams` never included the fragment.
+- `setDeepLinkCallback` / `handleDeepLink(url)` are unchanged and separate from `onLink` / `handleIntent`.
+
 ## 1.3.0 (2026-10-21)
 
 - **Version re-sync.** iOS, Android and React Native all ship as 1.3.0, so one number names one feature set again (React Native had moved to 1.2.1 on its own). React Native 1.3.0 adds an Expo Router helper and pins `com.deeplinknow:dln-android:1.3.0`.

@@ -3,6 +3,7 @@ package com.deeplinknow
 import android.content.ClipDescription
 import android.content.ClipboardManager
 import android.content.Context
+import android.content.Intent
 import android.net.Uri
 import android.os.Build
 import android.os.Handler
@@ -401,6 +402,12 @@ class DLN internal constructor(
     @Volatile private var referrerData: ReferrerData? = null
     @Volatile private var deepLinkCallback: DeepLinkCallback? = null
 
+    /**
+     * The deferred link this process's chain returned (SDK-91): [DLN.onLink] delivers it even
+     * when the app's own [DLN.checkDeferredDeepLink] call got it first.
+     */
+    @Volatile internal var processDeferredLink: DeferredDeepLink? = null
+
     /** Set when the clipboard was read (tests assert init and the Android chain never do). */
     @Volatile internal var clipboardRead = false
 
@@ -466,6 +473,10 @@ class DLN internal constructor(
 
     internal val initFailed: Boolean
         get() = initOutcome?.isFailure == true
+
+    /** True once init finished (either way); the link domains are final from then on. */
+    internal val initComplete: Boolean
+        get() = initOutcome != null
 
     internal suspend fun awaitInit(): Result<DLNAppInfo> {
         val deferred = initDeferred ?: return Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED))
@@ -681,6 +692,7 @@ class DLN internal constructor(
         endpoint: String,
         query: List<Pair<String, String>> = emptyList(),
         body: String? = null,
+        retryAttempts: Int = config.retryAttempts,
     ): HttpResponse = withContext(Dispatchers.IO) {
         val url = endpointUrl(endpoint, query)
         val request = Request.Builder()
@@ -705,7 +717,7 @@ class DLN internal constructor(
             }
             val code = response?.code
             val transient = failure != null || (code != null && (code >= 500 || code == 429))
-            if (!transient || attempt >= config.retryAttempts.coerceAtLeast(0)) {
+            if (!transient || attempt >= retryAttempts.coerceAtLeast(0)) {
                 failure?.let { throw DLNException(DLNErrorCode.NETWORK, serverMessage = it.javaClass.simpleName, cause = it) }
                 return@withContext response!!
             }
@@ -1053,6 +1065,7 @@ class DLN internal constructor(
         referrerData = null
         lastReferrerOutcome = null
         referrerDeferred = null
+        processDeferredLink = null
         log("Deferred deep link state reset")
     }
 
@@ -1096,6 +1109,7 @@ class DLN internal constructor(
                 val link = fromServer(referrer.link, DeferredDeepLinkSource.REFERRER, 100.0, MatchQuality.HIGH, null)
                 log("checkDeferredDeepLink: referrer found ${link.fullPath} (confidence 100, HIGH)")
                 markDeferredChecked()
+                processDeferredLink = link
                 return Result.success(link)
             }
             is ReferrerOutcome.None -> log("checkDeferredDeepLink: referrer none")
@@ -1120,6 +1134,7 @@ class DLN internal constructor(
             val link = fromServer(candidate.deeplink!!, DeferredDeepLinkSource.FINGERPRINT, candidate.confidenceScore, quality, candidate.matchDetails)
             log("checkDeferredDeepLink: fingerprint found ${link.fullPath} (confidence ${candidate.confidenceScore}, $quality)")
             markDeferredChecked()
+            processDeferredLink = link
             return Result.success(link)
         }
         log("checkDeferredDeepLink: fingerprint found no eligible candidate (${response.matches.size} returned)")
@@ -1340,6 +1355,50 @@ class DLN internal constructor(
         return recordOutcome(ErrorKind.FIND, result).getOrNull()
     }
 
+    // ---- Resolving a direct open (SDK-90, AND-38) ----
+
+    /**
+     * `GET /api/v1/sdk/resolve?path=<fullPath>`: the stored link for a path on the app's domain,
+     * or null on 404, any error, or no answer within the configured timeout. One attempt, no
+     * retries, so a direct open is never delayed beyond the timeout. Never throws.
+     */
+    internal suspend fun resolvePath(fullPath: String): DeeplinkMatch? {
+        if (!isInitializedSuccessfully) return null
+        if (fullPath.isEmpty() || fullPath.length > RESOLVE_MAX_PATH) return null
+        return try {
+            withTimeoutOrNull(config.timeoutMs) {
+                log("resolve: GET /api/v1/sdk/resolve")
+                val response = execute("GET", "resolve", listOf("path" to fullPath), retryAttempts = 0)
+                if (response.code in 200..299) {
+                    DLNJson.decodeResolve(DLNJson.parse(response.body))
+                } else {
+                    val error = errorFor(response).also { clearInitCacheOnAuthFailure(it) }
+                    log("resolve: ${response.code} (${error.code.value}), delivering the link unresolved")
+                    null
+                }
+            } ?: run {
+                log("resolve: no answer within ${config.timeoutMs}ms, delivering the link unresolved")
+                null
+            }
+        } catch (e: CancellationException) {
+            if (!currentCoroutineContext().isActive) throw e
+            null
+        } catch (e: Exception) {
+            log("resolve: failed (${e.javaClass.simpleName}), delivering the link unresolved")
+            null
+        }
+    }
+
+    /** True when the app's manifest has a VIEW intent filter for [uri]'s custom scheme (AND-36). */
+    internal fun appDeclaresScheme(uri: Uri): Boolean = try {
+        val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, uri).setPackage(appContext.packageName)
+        appContext.packageManager.queryIntentActivities(intent, 0).isNotEmpty()
+    } catch (e: Exception) {
+        false
+    }
+
+    internal fun logDebug(message: String) = log(message)
+
     // ---- Domains and parsing (SDK-30..38, AND-25..27) ----
 
     internal fun hostAllowed(host: String?): Boolean {
@@ -1498,6 +1557,9 @@ class DLN internal constructor(
         private const val INIT_CACHE_FORMAT = 1
         private const val INIT_CACHE_MAX_AGE_MS = 24L * 60 * 60 * 1000
 
+        /** API-SDK-71: `path` is at most 500 characters. */
+        private const val RESOLVE_MAX_PATH = 500
+
         /** SDK-83: whether this process already had its one chance to use the init cache. */
         @Volatile
         internal var initCacheConsulted = false
@@ -1520,7 +1582,7 @@ class DLN internal constructor(
          * Callback variants run here, not in an instance's scope, so a later [init] that replaces
          * the instance can't cancel them: each callback fires exactly once (AND-31).
          */
-        private val sdkScope = CoroutineScope(
+        internal val sdkScope = CoroutineScope(
             SupervisorJob() + Dispatchers.IO + CoroutineExceptionHandler { _, e ->
                 Log.w(TAG, "Unexpected internal error: ${e.javaClass.simpleName}")
             }
@@ -1528,7 +1590,7 @@ class DLN internal constructor(
 
         private val mainHandler by lazy { Handler(Looper.getMainLooper()) }
 
-        private fun postMain(block: () -> Unit) {
+        internal fun postMain(block: () -> Unit) {
             mainHandler.post {
                 try {
                     block()
@@ -1577,7 +1639,7 @@ class DLN internal constructor(
             return result
         }
 
-        private fun warnCheckFailure(result: Result<DeferredDeepLink?>) {
+        internal fun warnCheckFailure(result: Result<DeferredDeepLink?>) {
             result.exceptionOrNull()?.let { Log.w(TAG, "checkDeferredDeepLink failed: ${it.message}") }
         }
 
@@ -1628,6 +1690,9 @@ class DLN internal constructor(
                     }
                 }
                 dln.start()
+                // SDK-86: a handler registered before init (or a check that failed with the
+                // replaced instance) starts its one deferred check now.
+                DLNLinkRouter.maybeStartDeferred()
                 if (onComplete != null) {
                     sdkScope.launch {
                         val result = try {
@@ -1734,6 +1799,7 @@ class DLN internal constructor(
         @JvmStatic
         fun resetDeferredDeepLink() {
             try {
+                DLNLinkRouter.resetDeferred()
                 instance?.resetLocalState()
             } catch (e: Exception) {
                 Log.w(TAG, "resetDeferredDeepLink failed: ${e.javaClass.simpleName}")
@@ -1783,6 +1849,84 @@ class DLN internal constructor(
             return dln.handleDeepLinkInternal(url)
         }
 
+        // ---- One link object for every open (1.4.0; SDK-86..91, AND-35..40) ----
+
+        /**
+         * Registers the app's one link handler (SDK-86). It receives a [DLNLink] for the deferred
+         * link (`type = DEFERRED`, from the first-launch chain, which registering starts once per
+         * process) and for every direct open passed to [handleIntent] (`type = DIRECT`). Called
+         * on the main thread. Links that arrived before a handler was registered are replayed to
+         * it once (deferred first). Registering again replaces the handler and the options;
+         * re-registering with `hold = false` delivers a held link. The handler carries over when
+         * [init] replaces the instance. Never throws.
+         *
+         * @return a subscription whose [DLNLinkSubscription.remove] unregisters this handler.
+         */
+        @JvmSynthetic
+        fun onLink(options: DLNLinkOptions = DLNLinkOptions(), handler: (DLNLink) -> Unit): DLNLinkSubscription =
+            DLNLinkRouter.register(options, handler)
+
+        /** Java-friendly form of [onLink]: `DLN.onLink(link -> …)` or `DLN.onLink(options, link -> …)`. */
+        @JvmStatic
+        @JvmOverloads
+        fun onLink(options: DLNLinkOptions = DLNLinkOptions(), handler: DLNLinkHandler): DLNLinkSubscription =
+            DLNLinkRouter.register(options) { link -> handler.onLink(link) }
+
+        /**
+         * Hands an Activity's intent to the SDK (SDK-87): call it from `onCreate` and
+         * `onNewIntent`. Returns `true` when the intent's URL is a link on the app's domains
+         * (`source = APP_LINK`) or the app's custom scheme (`source = SCHEME`), and delivers it
+         * to the [onLink] handler; `false` otherwise (nothing is delivered). The same intent is
+         * delivered once (SDK-88). Never throws; `null` gives `false`.
+         */
+        @JvmStatic
+        fun handleIntent(intent: Intent?): Boolean = DLNLinkRouter.handleIntent(intent)
+
+        /**
+         * The links kept by `hold = true` (SDK-89): the latest deferred and the latest direct
+         * link, deferred first. Empty when nothing is held. Java: `DLN.getPendingLinks()`.
+         */
+        @JvmStatic
+        val pendingLinks: List<DLNLink>
+            get() = DLNLinkRouter.pendingLinks
+
+        /** The first of [pendingLinks] (SDK-89), or null. Java: `DLN.getPendingLink()`. */
+        @JvmStatic
+        val pendingLink: DLNLink?
+            get() = DLNLinkRouter.pendingLink
+
+        /**
+         * Delivers the held links to the handler (deferred first), if any, and ends the hold:
+         * later links go straight to the handler (SDK-89). `false` when no link was delivered.
+         */
+        @JvmStatic
+        fun releasePendingLink(): Boolean = DLNLinkRouter.releasePending()
+
+        /** Drops the held links without delivering them; the hold stays on (SDK-89). */
+        @JvmStatic
+        fun clearPendingLink() = DLNLinkRouter.clearPending()
+
+        /**
+         * Parses [url] as a direct open and, for a link on the app's domains, looks it up with
+         * `GET /api/v1/sdk/resolve` (SDK-90): the resolved [DLNLink], or the unresolved one on a
+         * 404, an error or a timeout. Null when [url] is not one of the app's links. Waits for
+         * init when it is in flight. Delivers nothing to the handler. Never throws.
+         */
+        suspend fun resolveLink(url: String): DLNLink? = DLNLinkRouter.resolveLink(url)
+
+        /** Callback form of [resolveLink] for Java; [callback] runs once on the main thread. */
+        @JvmStatic
+        fun resolveLink(url: String, callback: DLNLinkResultCallback) {
+            sdkScope.launch {
+                val link = try {
+                    DLNLinkRouter.resolveLink(url)
+                } catch (e: Exception) {
+                    null
+                }
+                postMain { callback.onResult(link) }
+            }
+        }
+
         internal fun resetForTesting() {
             synchronized(lock) {
                 instance?.shutdown()
@@ -1790,6 +1934,7 @@ class DLN internal constructor(
                 pendingCallback = null
                 initCacheConsulted = false
             }
+            DLNLinkRouter.resetForTesting()
             synchronized(errorLock) {
                 lastErrorValue = null
                 lastErrorKind = null

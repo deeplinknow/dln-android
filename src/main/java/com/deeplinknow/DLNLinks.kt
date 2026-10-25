@@ -111,10 +111,65 @@ internal object DLNLinks {
             val path = if (encodedPath.isEmpty()) "/" else encodedPath
             val query = uri.encodedQuery
             val fullPath = if (query.isNullOrEmpty()) path else "$path?$query"
-            ParsedDeepLink(path = path, queryParams = parseQuery(query), fullPath = fullPath, url = url)
+            ParsedDeepLink(path = path, queryParams = parseQuery(query), fullPath = fullPath, url = stripDlnFragment(url))
         } catch (e: Exception) {
             null
         }
+    }
+
+    /** Schemes that are never an app's own deep link scheme (AND-36). */
+    private val NON_APP_SCHEMES = setOf(
+        "http", "https", "file", "content", "android.resource", "intent", "javascript", "data",
+        "about", "blob", "mailto", "tel", "sms", "smsto", "mms", "geo", "market", "ftp",
+    )
+
+    /** True when [scheme] could be an app's custom URL scheme (not http(s) or a system scheme). */
+    fun isCustomSchemeCandidate(scheme: String?): Boolean {
+        val s = scheme?.lowercase(Locale.ROOT) ?: return false
+        return s.isNotEmpty() && s !in NON_APP_SCHEMES
+    }
+
+    /**
+     * AND-36: a custom-scheme URL (`myapp://products/123?x=1`) as a link. The host is the first
+     * path segment (`/products/123`), so `myapp://products/123` and `myapp:///products/123` give
+     * the same path. Path and query keep SDK-34..36 semantics (not decoded). Null for http(s),
+     * opaque URIs (`myapp:x`) or malformed input. Never throws. The caller decides whether the
+     * scheme is the app's.
+     */
+    fun parseScheme(rawUrl: String?): ParsedDeepLink? {
+        return try {
+            val url = rawUrl?.trim() ?: return null
+            if (url.isEmpty()) return null
+            val uri = Uri.parse(url)
+            if (!isCustomSchemeCandidate(uri.scheme)) return null
+            if (!uri.isHierarchical) return null
+            val authority = uri.encodedAuthority.orEmpty()
+            val encodedPath = uri.encodedPath.orEmpty()
+            var path = if (authority.isEmpty()) encodedPath else "/$authority$encodedPath"
+            if (!path.startsWith("/")) path = "/$path"
+            val query = uri.encodedQuery
+            val fullPath = if (query.isNullOrEmpty()) path else "$path?$query"
+            ParsedDeepLink(path = path, queryParams = parseQuery(query), fullPath = fullPath, url = stripDlnFragment(url))
+        } catch (e: Exception) {
+            null
+        }
+    }
+
+    /**
+     * SDK-92: drops a `dln` parameter (`#dln=<click id>`, which the link page may add to a
+     * copied link) from the fragment. Other fragment parameters are kept in order; an empty
+     * fragment loses its `#`. Path and query are untouched.
+     */
+    fun stripDlnFragment(url: String): String {
+        val hash = url.indexOf('#')
+        if (hash == -1) return url
+        val fragment = url.substring(hash + 1)
+        val parts = fragment.split('&')
+        fun isDln(part: String) = formDecode(part.substringBefore('=')) == "dln"
+        if (parts.none(::isDln)) return url
+        val kept = parts.filter { it.isNotEmpty() && !isDln(it) }
+        val base = url.substring(0, hash)
+        return if (kept.isEmpty()) base else base + "#" + kept.joinToString("&")
     }
 
     /** FLOW-52: `fullPath` up to the first `?` (and before any `#`), undecoded; empty becomes `/`. */
