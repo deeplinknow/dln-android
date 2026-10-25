@@ -2,6 +2,14 @@
 
 All notable changes to the DeepLinkNow Android SDK (`com.deeplinknow:dln-android`). iOS, Android and React Native share one major.minor version (SDK-84).
 
+## 1.4.1 (2026-10-25)
+
+Fixes. No API changes.
+
+- **A re-created activity no longer delivers its old link again** (SDK-88, AND-41). When Android killed the process and the user came back through Recents (or with "Don't keep activities", or after low memory), the activity got its original intent back and `handleIntent(intent)` in `onCreate` delivered the open a second time. `DLN.init` now watches activity creation and marks the intent of an activity created from saved state as handled. Apps that call `DLN.init` in `Application.onCreate` need no change; the README now also shows `if (savedInstanceState == null) DLN.handleIntent(intent)`.
+- **One deferred chain for every concurrent caller** (SDK-27, SDK-91, AND-42). `checkDeferredDeepLink(minConfidence = 50)` running next to `onLink`'s default check started two `/match` chains, and the `onLink` handler could miss a link the other run found. Concurrent callers now share one run and each applies its own `minConfidence`; `onLink` gets the link if the app's own call found one it accepts.
+- `DLN.SDK_VERSION` is `"1.4.1"`.
+
 ## 1.4.0 (2026-10-25)
 
 One link object for every open (SDK-86 to SDK-91, AND-35 to AND-40). Additive: every 1.3.0 call compiles and behaves as before.

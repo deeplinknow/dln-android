@@ -1,13 +1,16 @@
 package com.deeplinknow
 
+import android.app.Activity
 import android.content.ComponentName
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
 import android.net.Uri
+import android.os.Bundle
 import android.os.Looper
 import androidx.test.core.app.ApplicationProvider
 import com.android.installreferrer.api.InstallReferrerClient.InstallReferrerResponse
+import com.deeplinknow.DLNTestSupport.matchJson
 import com.deeplinknow.DLNTestSupport.DEEPLINK_ID
 import com.deeplinknow.DLNTestSupport.FP_ID
 import com.deeplinknow.DLNTestSupport.deeplinkJson
@@ -17,6 +20,7 @@ import com.deeplinknow.DLNTestSupport.mockInstallReferrer
 import com.deeplinknow.DLNTestSupport.referrerLookupSuccess
 import com.deeplinknow.DLNTestSupport.routingDispatcher
 import io.mockk.unmockkAll
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -30,6 +34,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
 import org.robolectric.annotation.Config
@@ -50,6 +55,7 @@ class DLNLinkTest {
     private var lookup: () -> MockResponse = { json(referrerLookupSuccess()) }
     private var init: () -> MockResponse = { json(initResponse()) }
     private var resolve: () -> MockResponse = { json("""{"error":"Deeplink not found"}""", 404) }
+    private var match: () -> MockResponse = { json(DLNTestSupport.matchResponse()) }
     private val lookupCalls = AtomicInteger()
     private val matchCalls = AtomicInteger()
     private val resolveRequests = CopyOnWriteArrayList<RecordedRequest>()
@@ -65,7 +71,7 @@ class DLNLinkTest {
                     mapOf(
                         "/api/v1/sdk/init" to { init() },
                         "/api/v1/sdk/referrer-lookup" to { lookupCalls.incrementAndGet(); lookup() },
-                        "/api/v1/sdk/match" to { matchCalls.incrementAndGet(); json(DLNTestSupport.matchResponse()) },
+                        "/api/v1/sdk/match" to { matchCalls.incrementAndGet(); match() },
                         "/api/v1/sdk/resolve" to { resolve() },
                     )
                 )
@@ -459,6 +465,32 @@ class DLNLinkTest {
         assertTrue(received.isEmpty())
     }
 
+    @Test
+    fun `SDK-88 AND-41 an activity re-created from saved state does not deliver its old intent again`() {
+        noReferrer()
+        initSdk()
+        record()
+        settle()
+        // A fresh launch delivers the open.
+        val first = Robolectric.buildActivity(Activity::class.java, viewIntent("https://myapp.deeplinknow.com/launch"))
+            .create(null).get()
+        assertTrue(DLN.handleIntent(first.intent))
+        assertTrue(idleMainUntil { received.size == 1 })
+        // The process died and the user came back from Recents: the system re-creates the
+        // activity with the original intent and its saved state, well outside the 3 s window.
+        DLNLinkRouter.clock = { Long.MAX_VALUE / 2 }
+        val restored = Robolectric.buildActivity(Activity::class.java, viewIntent("https://myapp.deeplinknow.com/launch"))
+            .create(Bundle()).get()
+        assertTrue("still the app's link", DLN.handleIntent(restored.intent))
+        settle()
+        assertEquals(1, received.size)
+        // A new tap on the same link (no saved state) is a new open.
+        val again = Robolectric.buildActivity(Activity::class.java, viewIntent("https://myapp.deeplinknow.com/launch"))
+            .create(null).get()
+        assertTrue(DLN.handleIntent(again.intent))
+        assertTrue(idleMainUntil { received.size == 2 })
+    }
+
     // ---- SDK-89: hold ----
 
     @Test
@@ -737,6 +769,44 @@ class DLNLinkTest {
         assertEquals(0, matchCalls.get())
         // a later checkDeferredDeepLink still follows SDK-23
         assertNull(runBlocking { DLN.checkDeferredDeepLink() }.getOrThrow())
+    }
+
+    @Test
+    fun `SDK-27 AND-42 concurrent calls with different minConfidence share one chain and each applies its own threshold`() {
+        noReferrer()
+        match = {
+            json(DLNTestSupport.matchResponse(
+                matchJson(45.0, "LOW", DLNTestSupport.deeplinkJson(id = "00000000-0000-4000-8000-000000000001")),
+            )).setHeadersDelay(300, TimeUnit.MILLISECONDS)
+        }
+        initSdk()
+        val strict = runBlocking {
+            val call = async { DLN.checkDeferredDeepLink(minConfidence = 50.0) }
+            record() // onLink's own run starts while the app's call is in flight
+            call.await()
+        }
+        assertNull("45 is below the caller's 50", strict.getOrThrow())
+        assertTrue("onLink has no threshold and gets the candidate", idleMainUntil { received.size == 1 })
+        assertEquals("00000000-0000-4000-8000-000000000001", received.single().deeplinkId)
+        assertEquals(1, matchCalls.get())
+        settle()
+        assertEquals(1, matchCalls.get())
+        assertEquals(1, received.size)
+    }
+
+    @Test
+    fun `SDK-91 AND-42 onLink gets a link the app's stricter checkDeferredDeepLink run found and rejected`() {
+        noReferrer()
+        match = {
+            json(DLNTestSupport.matchResponse(
+                matchJson(45.0, "LOW", DLNTestSupport.deeplinkJson(id = "00000000-0000-4000-8000-000000000001")),
+            ))
+        }
+        initSdk()
+        assertNull(runBlocking { DLN.checkDeferredDeepLink(minConfidence = 50.0) }.getOrThrow())
+        record()
+        assertTrue(idleMainUntil { received.size == 1 })
+        assertEquals(1, matchCalls.get())
     }
 
     @Test

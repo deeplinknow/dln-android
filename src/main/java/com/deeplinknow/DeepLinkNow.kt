@@ -179,6 +179,24 @@ data class DeferredDeepLink(
     val matchDetails: MatchDetails? = null,
 )
 
+/**
+ * What one run of the deferred chain found (SDK-27): the referrer link, or every fingerprint
+ * candidate that carries a link, in server order. Concurrent callers share one run and each
+ * applies its own minConfidence with [pick] (SDK-14).
+ */
+internal class DeferredChainResult(
+    val referrer: DeferredDeepLink?,
+    val candidates: List<DeferredDeepLink>,
+) {
+    /** The referrer link, else the first candidate at or above [minConfidence] (no filter when null). */
+    fun pick(minConfidence: Double?): DeferredDeepLink? =
+        referrer ?: candidates.firstOrNull { minConfidence == null || it.confidenceScore >= minConfidence }
+
+    companion object {
+        val NONE = DeferredChainResult(null, emptyList())
+    }
+}
+
 /** Java-friendly callback for [DLN.checkDeferredDeepLink]. Exactly one of the two is non-null, or both null for "no link". */
 interface DeferredDeepLinkCallback {
     fun onResult(link: DeferredDeepLink?, error: DLNException?)
@@ -403,10 +421,10 @@ class DLN internal constructor(
     @Volatile private var deepLinkCallback: DeepLinkCallback? = null
 
     /**
-     * The deferred link this process's chain returned (SDK-91): [DLN.onLink] delivers it even
-     * when the app's own [DLN.checkDeferredDeepLink] call got it first.
+     * What this process's chain found (SDK-91): [DLN.onLink] delivers its link even when the
+     * app's own [DLN.checkDeferredDeepLink] call ran the chain first, with its own minConfidence.
      */
-    @Volatile internal var processDeferredLink: DeferredDeepLink? = null
+    @Volatile internal var processChain: DeferredChainResult? = null
 
     /** Set when the clipboard was read (tests assert init and the Android chain never do). */
     @Volatile internal var clipboardRead = false
@@ -420,7 +438,8 @@ class DLN internal constructor(
     @Volatile private var lastReferrerOutcome: ReferrerOutcome? = null
 
     private val checkLock = Any()
-    private val inFlightChecks = HashMap<Pair<Double?, Boolean>, Deferred<Result<DeferredDeepLink?>>>()
+    /** The running chain per `force` value; every concurrent caller shares it (SDK-27). */
+    private val inFlightChecks = HashMap<Boolean, Deferred<Result<DeferredChainResult>>>()
 
     private val stateLock = Any()
     @Volatile private var legacyMigrated = false
@@ -1065,7 +1084,7 @@ class DLN internal constructor(
         referrerData = null
         lastReferrerOutcome = null
         referrerDeferred = null
-        processDeferredLink = null
+        processChain = null
         log("Deferred deep link state reset")
     }
 
@@ -1073,11 +1092,18 @@ class DLN internal constructor(
 
     // ---- checkDeferredDeepLink (SDK-10..27) ----
 
-    internal suspend fun checkDeferred(minConfidence: Double?, force: Boolean): Result<DeferredDeepLink?> {
-        val key = minConfidence to force
+    internal suspend fun checkDeferred(minConfidence: Double?, force: Boolean): Result<DeferredDeepLink?> =
+        checkDeferredChain(minConfidence, force).map { it.pick(minConfidence) }
+
+    /**
+     * Runs the chain once for every concurrent caller (SDK-27, SDK-91), whatever their
+     * minConfidence: each caller applies its own to the shared result. Only a different `force`
+     * starts a second run.
+     */
+    internal suspend fun checkDeferredChain(minConfidence: Double?, force: Boolean): Result<DeferredChainResult> {
         val deferred = synchronized(checkLock) {
-            inFlightChecks[key]?.takeIf { it.isActive }
-                ?: scope.async { runCheck(minConfidence, force) }.also { inFlightChecks[key] = it }
+            inFlightChecks[force]?.takeIf { it.isActive }
+                ?: scope.async { runCheck(minConfidence, force) }.also { inFlightChecks[force] = it }
         }
         return try {
             deferred.await()
@@ -1087,11 +1113,16 @@ class DLN internal constructor(
         } catch (e: Exception) {
             Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
         } finally {
-            synchronized(checkLock) { if (inFlightChecks[key] === deferred) inFlightChecks.remove(key) }
+            synchronized(checkLock) { if (inFlightChecks[force] === deferred) inFlightChecks.remove(force) }
         }
     }
 
-    private suspend fun runCheck(minConfidence: Double?, force: Boolean): Result<DeferredDeepLink?> {
+    /**
+     * One run of the chain. [minConfidence] is the starting caller's: it decides, as before
+     * 1.4.1, whether a fingerprint result is definitive enough to set the first-launch flag
+     * (SDK-23). Every candidate with a link is kept for the other callers.
+     */
+    private suspend fun runCheck(minConfidence: Double?, force: Boolean): Result<DeferredChainResult> {
         val init = awaitInit()
         if (init.isFailure) {
             log("checkDeferredDeepLink: not initialized")
@@ -1099,7 +1130,7 @@ class DLN internal constructor(
         }
         if (!force && loadState().deferredChecked) {
             log("checkDeferredDeepLink: already completed on an earlier launch, no link")
-            return Result.success(null)
+            return Result.success(DeferredChainResult.NONE)
         }
 
         // 1. Play Install Referrer (exact)
@@ -1109,8 +1140,7 @@ class DLN internal constructor(
                 val link = fromServer(referrer.link, DeferredDeepLinkSource.REFERRER, 100.0, MatchQuality.HIGH, null)
                 log("checkDeferredDeepLink: referrer found ${link.fullPath} (confidence 100, HIGH)")
                 markDeferredChecked()
-                processDeferredLink = link
-                return Result.success(link)
+                return Result.success(DeferredChainResult(link, emptyList()).also { processChain = it })
             }
             is ReferrerOutcome.None -> log("checkDeferredDeepLink: referrer none")
             is ReferrerOutcome.Transient -> {
@@ -1126,20 +1156,20 @@ class DLN internal constructor(
             log("checkDeferredDeepLink: fingerprint error (${(it as? DLNException)?.code?.value})")
             return Result.failure(it)
         }
-        val candidate = response.matches.firstOrNull { m ->
-            m.deeplink != null && (minConfidence == null || m.confidenceScore >= minConfidence)
+        val candidates = response.matches.filter { it.deeplink != null }.map { m ->
+            val quality = MatchQuality.parse(m.matchQuality) ?: MatchQuality.fromScore(m.confidenceScore)
+            fromServer(m.deeplink!!, DeferredDeepLinkSource.FINGERPRINT, m.confidenceScore, quality, m.matchDetails)
         }
-        if (candidate != null) {
-            val quality = MatchQuality.parse(candidate.matchQuality) ?: MatchQuality.fromScore(candidate.confidenceScore)
-            val link = fromServer(candidate.deeplink!!, DeferredDeepLinkSource.FINGERPRINT, candidate.confidenceScore, quality, candidate.matchDetails)
-            log("checkDeferredDeepLink: fingerprint found ${link.fullPath} (confidence ${candidate.confidenceScore}, $quality)")
-            markDeferredChecked()
-            processDeferredLink = link
-            return Result.success(link)
+        val result = DeferredChainResult(null, candidates)
+        val found = result.pick(minConfidence)
+        if (found != null) {
+            log("checkDeferredDeepLink: fingerprint found ${found.fullPath} (confidence ${found.confidenceScore}, ${found.matchQuality})")
+        } else {
+            log("checkDeferredDeepLink: fingerprint found no eligible candidate (${response.matches.size} returned)")
         }
-        log("checkDeferredDeepLink: fingerprint found no eligible candidate (${response.matches.size} returned)")
-        if (definitive) markDeferredChecked()
-        return Result.success(null)
+        if (found != null || definitive) markDeferredChecked()
+        if (candidates.isNotEmpty()) processChain = result
+        return Result.success(result)
     }
 
     private fun fromServer(
@@ -1550,7 +1580,7 @@ class DLN internal constructor(
 
     companion object {
         /** SDK version, kept in sync with build.gradle.kts (AND-01). */
-        const val SDK_VERSION = "1.4.0"
+        const val SDK_VERSION = "1.4.1"
 
         private const val TAG = "DLN"
         private const val INIT_CACHE_FILE = "com.deeplinknow.initcache.json"
@@ -1690,6 +1720,8 @@ class DLN internal constructor(
                     }
                 }
                 dln.start()
+                // AND-41: re-created activities replay their old intent; mark it handled.
+                DLNLinkRouter.watchActivities(context)
                 // SDK-86: a handler registered before init (or a check that failed with the
                 // replaced instance) starts its one deferred check now.
                 DLNLinkRouter.maybeStartDeferred()

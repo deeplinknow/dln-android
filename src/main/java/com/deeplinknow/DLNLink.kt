@@ -1,7 +1,11 @@
 package com.deeplinknow
 
+import android.app.Activity
+import android.app.Application
+import android.content.Context
 import android.content.Intent
 import android.net.Uri
+import android.os.Bundle
 import android.os.SystemClock
 import android.util.Log
 import kotlinx.coroutines.CancellationException
@@ -173,6 +177,7 @@ internal object DLNLinkRouter {
     private var deferredState = DeferredState.IDLE
     private var lastDirectUrl: String? = null
     private var lastDirectAt = 0L
+    private var watchingActivities = false
 
     private fun warn(message: String) = Log.w(TAG, message)
 
@@ -301,17 +306,19 @@ internal object DLNLinkRouter {
     }
 
     private suspend fun runDeferred(dln: DLN, opts: DLNLinkOptions) {
-        val result: Result<DeferredDeepLink?> = try {
-            dln.checkDeferred(opts.minConfidence, opts.force)
+        val chain: Result<DeferredChainResult> = try {
+            dln.checkDeferredChain(opts.minConfidence, opts.force)
         } catch (e: CancellationException) {
             Result.failure(DLNException(DLNErrorCode.NOT_INITIALIZED, cause = e))
         } catch (e: Exception) {
             Result.failure(DLNException(DLNErrorCode.INVALID_RESPONSE, cause = e))
         }
+        val result = chain.map { it.pick(opts.minConfidence) }
         DLN.warnCheckFailure(result)
         DLN.recordOutcome(DLN.Companion.ErrorKind.CHECK, result)
-        // SDK-91: the app's own checkDeferredDeepLink may have taken this process's link first.
-        val link = if (result.isSuccess) result.getOrNull() ?: dln.processDeferredLink else null
+        // SDK-91: the app's own checkDeferredDeepLink may have run this process's chain first
+        // (with its own minConfidence); this handler's threshold applies to what it found.
+        val link = if (result.isSuccess) result.getOrNull() ?: dln.processChain?.pick(opts.minConfidence) else null
         synchronized(lock) {
             deferredState = if (result.isSuccess) DeferredState.DONE else DeferredState.IDLE
         }
@@ -331,6 +338,53 @@ internal object DLNLinkRouter {
 
     // ---- direct opens (SDK-87, SDK-88) ----
 
+    /**
+     * AND-41: an activity created from saved state (the process was killed and the user came
+     * back through Recents, "Don't keep activities", low memory, a configuration change) gets
+     * its original intent again. Marking that intent handled before the app's `onCreate` hands
+     * it over keeps an old open from being delivered twice. Registered once per process by
+     * [DLN.init]; the app needs no `savedInstanceState` check of its own.
+     */
+    fun watchActivities(context: Context) {
+        try {
+            val app = context.applicationContext as? Application ?: context as? Application ?: return
+            synchronized(lock) {
+                if (watchingActivities) return
+                watchingActivities = true
+            }
+            app.registerActivityLifecycleCallbacks(RestoredIntents)
+        } catch (e: Exception) {
+            warn("DLN: could not watch activities (${e.javaClass.simpleName})")
+        }
+    }
+
+    private fun markHandled(intent: Intent?) {
+        try {
+            if (intent?.data != null) intent.putExtra(EXTRA_HANDLED, true)
+        } catch (e: Exception) {
+            // the dedupe window still applies
+        }
+    }
+
+    private object RestoredIntents : Application.ActivityLifecycleCallbacks {
+        // API 29+: before the activity's onCreate, so even a handleIntent call made before
+        // super.onCreate sees the mark.
+        override fun onActivityPreCreated(activity: Activity, savedInstanceState: Bundle?) {
+            if (savedInstanceState != null) markHandled(activity.intent)
+        }
+
+        override fun onActivityCreated(activity: Activity, savedInstanceState: Bundle?) {
+            if (savedInstanceState != null) markHandled(activity.intent)
+        }
+
+        override fun onActivityStarted(activity: Activity) = Unit
+        override fun onActivityResumed(activity: Activity) = Unit
+        override fun onActivityPaused(activity: Activity) = Unit
+        override fun onActivityStopped(activity: Activity) = Unit
+        override fun onActivitySaveInstanceState(activity: Activity, outState: Bundle) = Unit
+        override fun onActivityDestroyed(activity: Activity) = Unit
+    }
+
     fun handleIntent(intent: Intent?): Boolean {
         return try {
             if (intent == null) return false
@@ -342,6 +396,7 @@ internal object DLNLinkRouter {
                 false
             }
             // AND-37: reopening from Recents replays the original intent; it is not a new open.
+            // AND-41: neither is an activity re-created from saved state (marked handled).
             val accepted = handleUrl(url, deliver = !fromHistory && !alreadyHandled)
             if (accepted && !alreadyHandled) {
                 try {
@@ -476,6 +531,7 @@ internal object DLNLinkRouter {
             deferredState = DeferredState.IDLE
             lastDirectUrl = null
             lastDirectAt = 0L
+            watchingActivities = false
         }
         duplicateWindowMs = 3_000L
         clock = { SystemClock.elapsedRealtime() }

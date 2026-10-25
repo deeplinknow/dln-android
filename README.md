@@ -8,13 +8,13 @@ DeepLinkNow is not an analytics or attribution SDK. It never reads the advertisi
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.4.0")
+    implementation("com.deeplinknow:dln-android:1.4.1")
 }
 ```
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:dln-android:1.4.0'
+    implementation 'com.deeplinknow:dln-android:1.4.1'
 }
 ```
 
@@ -88,7 +88,8 @@ DLN.onLink { link ->
 // The activity with your App Link intent filter
 override fun onCreate(savedInstanceState: Bundle?) {
     super.onCreate(savedInstanceState)
-    DLN.handleIntent(intent)
+    // A re-created activity (back from Recents after the process died) gets its old intent again.
+    if (savedInstanceState == null) DLN.handleIntent(intent)
 }
 
 override fun onNewIntent(intent: Intent) {
@@ -98,7 +99,7 @@ override fun onNewIntent(intent: Intent) {
 ```
 
 - Registering the handler runs the deferred check once per process, like `checkDeferredDeepLink()`. Links that arrive before a handler exists are passed to it when it registers.
-- `handleIntent` returns `true` for a link on your app's domains or your custom scheme, `false` for anything else. The same intent is only delivered once, even when `onCreate` and `onNewIntent` both see it, or the user reopens the app from Recents.
+- `handleIntent` returns `true` for a link on your app's domains or your custom scheme, `false` for anything else. The same intent is only delivered once, even when `onCreate` and `onNewIntent` both see it, the user reopens the app from Recents, or Android re-creates the activity after killing the process. From 1.4.1 the SDK spots a re-created activity itself (when `DLN.init` runs in `Application.onCreate`), so the `savedInstanceState == null` check is a second guard, not a requirement.
 - The handler runs on the main thread. `DLNLink` has every `DeferredDeepLink` field plus `type`. For a direct open, `confidenceScore` is 100 and `matchQuality` is `HIGH`.
 - **Custom scheme**: `myapp://products/123?x=1` arrives as path `/products/123`. A scheme counts as yours when your manifest has a VIEW intent filter for it, or pass `DLNLinkOptions(schemes = setOf("myapp"))`.
 - **Wait for sign-in**: `DLN.onLink(DLNLinkOptions(hold = true)) { … }` keeps the latest deferred and the latest direct link in `DLN.pendingLinks` (deferred first; `DLN.pendingLink` is the first). After sign-in, call `DLN.releasePendingLink()`: it delivers the held links (deferred first) and ends the hold, so later links go straight to your handler. `DLN.clearPendingLink()` drops them and keeps holding. Registering again with `hold = false` also delivers them and stops holding.
