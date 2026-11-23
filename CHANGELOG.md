@@ -2,6 +2,13 @@
 
 All notable changes to the DeepLinkNow Android SDK (`com.deeplinknow:dln-android`). iOS, Android and React Native share one major.minor version (SDK-84).
 
+## 1.4.2 (unreleased)
+
+Smaller match request. No API changes.
+
+- **The match request sends only what scoring uses** (SDK-21, SDK-60). `advertising_id` (always `null`) and `hardware_fingerprint` (a hash the server never matched; screen size scores instead) are no longer sent. Match scores don't change. `Fingerprint.hardwareFingerprint` stays in the public type and is now `null`.
+- `DLN.SDK_VERSION` is `"1.4.2"`.
+
 ## 1.4.1 (2026-10-25)
 
 Fixes. No API changes.

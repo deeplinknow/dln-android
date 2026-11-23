@@ -1208,35 +1208,7 @@ class DLN internal constructor(
         )
     }
 
-    // ---- Fingerprint (AND-20, AND-21, AND-23) ----
-
-    private fun simpleHash(str: String): String {
-        var hash = 0
-        for (element in str) {
-            hash = ((hash shl 5) - hash) + element.code
-        }
-        return hash.toString(16)
-    }
-
-    private fun generateHardwareFingerprint(
-        platform: String,
-        screenWidth: Int?,
-        screenHeight: Int?,
-        pixelRatio: Float?,
-        language: String,
-        timezone: String
-    ): String {
-        val components = listOfNotNull(
-            platform,
-            Build.VERSION.RELEASE,
-            screenWidth?.toString(),
-            screenHeight?.toString(),
-            pixelRatio?.toString(),
-            language,
-            timezone
-        )
-        return simpleHash(components.joinToString("|"))
-    }
+    // ---- Device signals for /match (AND-20, AND-21, AND-23) ----
 
     private fun formatDateToISO8601(date: Date): String {
         val formatter = SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss'Z'", Locale.US)
@@ -1250,7 +1222,7 @@ class DLN internal constructor(
         null
     }
 
-    internal fun getFingerprint(): Fingerprint {
+    internal fun deviceSignals(): Fingerprint {
         val screenWidth: Int?
         val screenHeight: Int?
         val pixelRatio: Float?
@@ -1284,7 +1256,7 @@ class DLN internal constructor(
             deviceId = androidId(),
             advertisingId = null,
             vendorId = null,
-            hardwareFingerprint = generateHardwareFingerprint("android", screenWidth, screenHeight, pixelRatio, language, timezone),
+            hardwareFingerprint = null, // not sent from 1.4.2 (SDK-21); the type is public API
             screenWidth = screenWidth,
             screenHeight = screenHeight,
             pixelRatio = pixelRatio,
@@ -1297,7 +1269,11 @@ class DLN internal constructor(
         1f
     }
 
-    /** The match body with every nullable key present (AND-20, SDK-21). */
+    /**
+     * The match body (AND-20, SDK-21). `device_id` and `vendor_id` are always present (JSON null
+     * when unknown). From 1.4.2 `advertising_id` and `hardware_fingerprint` are not sent: scoring
+     * uses neither and the server reads them as null (API-SDK-21).
+     */
     private fun matchBody(fp: Fingerprint): String {
         fun JsonObject.put(key: String, value: String?) =
             if (value == null) add(key, JsonNull.INSTANCE) else addProperty(key, value)
@@ -1311,9 +1287,7 @@ class DLN internal constructor(
         o.addProperty("installed_at", fp.installedAt)
         o.addProperty("last_opened_at", fp.lastOpenedAt)
         o.put("device_id", fp.deviceId)
-        o.put("advertising_id", null)
         o.put("vendor_id", null)
-        o.put("hardware_fingerprint", fp.hardwareFingerprint)
         fp.screenWidth?.let { o.addProperty("screen_width", it) }
         fp.screenHeight?.let { o.addProperty("screen_height", it) }
         fp.pixelRatio?.let { o.addProperty("pixel_ratio", it) }
@@ -1322,8 +1296,8 @@ class DLN internal constructor(
 
     private suspend fun requestMatches(): Result<MatchResponse> {
         return try {
-            val body = matchBody(getFingerprint())
-            log("fingerprint: POST /api/v1/sdk/match")
+            val body = matchBody(deviceSignals())
+            log("match: POST /api/v1/sdk/match")
             val response = execute("POST", "match", body = body)
             if (response.code !in 200..299) {
                 Result.failure(errorFor(response).also { clearInitCacheOnAuthFailure(it) })
@@ -1331,7 +1305,7 @@ class DLN internal constructor(
                 val parsed = DLNJson.decodeMatchResponse(DLNJson.parse(response.body))
                 val best = parsed.matches.firstOrNull()
                 log(
-                    "fingerprint: ${parsed.matches.size} candidate(s)" +
+                    "match: ${parsed.matches.size} candidate(s)" +
                         (best?.let { ", best confidence ${it.confidenceScore} (${it.matchQuality ?: MatchQuality.fromScore(it.confidenceScore)})" } ?: "")
                 )
                 Result.success(parsed)
@@ -1580,7 +1554,7 @@ class DLN internal constructor(
 
     companion object {
         /** SDK version, kept in sync with build.gradle.kts (AND-01). */
-        const val SDK_VERSION = "1.4.1"
+        const val SDK_VERSION = "1.4.2"
 
         private const val TAG = "DLN"
         private const val INIT_CACHE_FILE = "com.deeplinknow.initcache.json"

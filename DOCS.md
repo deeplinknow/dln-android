@@ -18,7 +18,7 @@ It also parses App Links that open an already-installed app, so deferred and dir
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.4.1")
+    implementation("com.deeplinknow:dln-android:1.4.2")
 }
 ```
 
@@ -26,7 +26,7 @@ dependencies {
 <dependency>
   <groupId>com.deeplinknow</groupId>
   <artifactId>dln-android</artifactId>
-  <version>1.4.1</version>
+  <version>1.4.2</version>
   <type>aar</type>
 </dependency>
 ```
@@ -218,15 +218,27 @@ A callback that throws does not crash the SDK.
 
 | Data | Purpose |
 |---|---|
-| Synthetic UA, OS version, `Build.MODEL`, language, time zone, screen size (dp) and density | Fingerprint matching against the click |
+| Synthetic UA, OS version, `Build.MODEL`, language, time zone, screen size (dp) and density | Matching the install to the click (`/match`) |
 | `ANDROID_ID` (`device_id`) | Sent on `/match` to claim a click for this install and keep repeat calls idempotent. Also sent on `/init` so monthly active users are counted per device, not per IP; the server stores only a hash. It is app-signing-key scoped |
 | Install Referrer string | Exact deferred link |
 
-- `advertising_id` and `vendor_id` are always JSON `null`.
+- `vendor_id` is always JSON `null`. From 1.4.2 `advertising_id` and `hardware_fingerprint` are not sent.
 - The SDK does not read the Google Advertising ID, location, contacts, carrier or the installed-apps list.
 - The server derives the IP from the connection.
 - On device the SDK stores only the first-launch flag and the definitive referrer result. They live in `noBackupFilesDir`, so they are excluded from Auto Backup and device transfer.
 - 1.0's `SharedPreferences("dln_referrer")` is migrated once and deleted.
+
+### Play Data safety form
+
+Answers for the SDK's part of the form (add your app's own data on top). DLN processes this data on your behalf as a service provider, which Google doesn't count as sharing.
+
+| Data type | Collected | Shared | Processed ephemerally | Required or optional | Purpose |
+|---|---|---|---|---|---|
+| Device or other IDs (`ANDROID_ID`) | Yes | No | No | Required | App functionality |
+
+- Data is encrypted in transit: yes (HTTPS only).
+- Device details used for matching (OS version, model, screen size, language, time zone) and the IP the server sees aren't Data safety data types on their own. DLN doesn't derive a location from the IP.
+- The SDK collects no location, personal info, contacts, app activity, web history or advertising ID.
 
 ## Emulator testing
 

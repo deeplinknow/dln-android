@@ -94,14 +94,14 @@ class DLNInstrumentedTest {
         assertNotNull("Instance should be available", instance)
         
         // Test that screen metrics are included in fingerprint
-        val fingerprintField = DLN::class.java.getDeclaredMethod("getFingerprint")
+        val fingerprintField = DLN::class.java.getDeclaredMethod("deviceSignals")
         fingerprintField.isAccessible = true
         val fingerprint = fingerprintField.invoke(instance) as Fingerprint
 
         assertNotNull("Screen width should be included", fingerprint.screenWidth)
         assertNotNull("Screen height should be included", fingerprint.screenHeight)
         assertNotNull("Pixel ratio should be included", fingerprint.pixelRatio)
-        assertNotNull("Hardware fingerprint should be generated", fingerprint.hardwareFingerprint)
+        assertNull("No device hash is sent from 1.4.2", fingerprint.hardwareFingerprint)
         assertEquals("Platform should be android", "android", fingerprint.platform)
         assertTrue("User agent should follow web format", 
             fingerprint.userAgent.contains("Mozilla/5.0") && 

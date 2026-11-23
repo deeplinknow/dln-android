@@ -8,13 +8,13 @@ DeepLinkNow is not an analytics or attribution SDK. It never reads the advertisi
 
 ```kotlin
 dependencies {
-    implementation("com.deeplinknow:dln-android:1.4.1")
+    implementation("com.deeplinknow:dln-android:1.4.2")
 }
 ```
 
 ```gradle
 dependencies {
-    implementation 'com.deeplinknow:dln-android:1.4.1'
+    implementation 'com.deeplinknow:dln-android:1.4.2'
 }
 ```
 
@@ -170,9 +170,21 @@ The SDK sends these to `/api/v1/sdk/match`:
 - install and open times
 - `ANDROID_ID`, which is scoped to the app-signing key. It is used to claim a click for this install, and is also sent on `/init` so monthly active users are counted per device (the server keeps only a hash)
 
-`advertising_id` and `vendor_id` are always `null`.
+`vendor_id` is always `null`. From 1.4.2 no advertising ID key or device hash is sent.
 
 The SDK stores only the first-launch flag, the referrer result and a copy of the last `/init` result (your public key, link domains and app info, no device data, so launches within 24 hours skip the network call), in `noBackupFilesDir`, which Auto Backup does not restore. Your API key is never logged.
+
+### Play Data safety form
+
+Answers for the SDK's part of the form (add your app's own data on top). DLN processes this data on your behalf as a service provider, which Google doesn't count as sharing.
+
+| Data type | Collected | Shared | Processed ephemerally | Required or optional | Purpose |
+|---|---|---|---|---|---|
+| Device or other IDs (`ANDROID_ID`) | Yes | No | No | Required | App functionality |
+
+- Data is encrypted in transit: yes (HTTPS only).
+- Device details used for matching (OS version, model, screen size, language, time zone) and the IP the server sees aren't Data safety data types on their own. DLN doesn't derive a location from the IP.
+- The SDK collects no location, personal info, contacts, app activity, web history or advertising ID.
 
 ## License
 

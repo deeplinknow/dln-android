@@ -111,7 +111,7 @@ class DLNMatchContractTest {
         assertEquals("android", fp["platform"].asString)
         assertTrue(fp["installed_at"].asString, zodDatetime.matches(fp["installed_at"].asString))
         assertTrue(fp["last_opened_at"].asString, zodDatetime.matches(fp["last_opened_at"].asString))
-        for (key in listOf("device_id", "advertising_id", "vendor_id", "hardware_fingerprint")) {
+        for (key in listOf("device_id", "vendor_id")) {
             assertTrue("$key missing", fp.has(key))
         }
         assertEquals("a1b2c3d4e5f60718", fp["device_id"].asString)
@@ -124,11 +124,12 @@ class DLNMatchContractTest {
     }
 
     @Test
-    fun `AND-20 SDK-21 SDK-61 advertising_id and vendor_id are JSON null, never empty strings`() {
+    fun `AND-20 SDK-21 SDK-61 vendor_id is JSON null and advertising_id and hardware_fingerprint are not sent`() {
         match(json(matchResponse()))
         val fp = sentFingerprint()
-        assertTrue(fp["advertising_id"].toString(), fp["advertising_id"].isJsonNull)
         assertTrue(fp["vendor_id"].toString(), fp["vendor_id"].isJsonNull)
+        assertFalse(fp.has("advertising_id"))
+        assertFalse(fp.has("hardware_fingerprint"))
     }
 
     @Test
@@ -146,10 +147,10 @@ class DLNMatchContractTest {
         val fp = sentFingerprint()
         val allowed = setOf(
             "user_agent", "platform", "os_version", "device_model", "language", "timezone",
-            "installed_at", "last_opened_at", "device_id", "advertising_id", "vendor_id",
-            "hardware_fingerprint", "screen_width", "screen_height", "pixel_ratio",
+            "installed_at", "last_opened_at", "device_id", "vendor_id",
+            "screen_width", "screen_height", "pixel_ratio",
         )
-        assertTrue((fp.keySet() - allowed).toString(), (fp.keySet() - allowed).isEmpty())
+        assertEquals(allowed, fp.keySet())
         assertFalse(fp.has("ip_address"))
     }
 
