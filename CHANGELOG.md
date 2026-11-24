@@ -2,7 +2,7 @@
 
 All notable changes to the DeepLinkNow Android SDK (`com.deeplinknow:dln-android`). iOS, Android and React Native share one major.minor version (SDK-84).
 
-## 1.4.2 (unreleased)
+## 1.4.2 (2026-11-24)
 
 Smaller match request. No API changes.
 
